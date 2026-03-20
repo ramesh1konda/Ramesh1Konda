@@ -1,0 +1,112 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: users
+    // Document ID: {userId} (Firebase Auth UID)
+    // Fields:
+    //   - uid: string (required) - Firebase Auth UID
+    //   - email: string (required, email format) - User's email
+    //   - displayName: string (optional) - User's display name
+    //   - role: string (required, enum: ["borrower", "lender"]) - The user's role
+    //   - createdAt: timestamp (required) - Creation time
+    //
+    // Collection: applications
+    // Document ID: {applicationId}
+    // Fields:
+    //   - borrowerId: string (required) - UID of the borrower
+    //   - borrowerName: string (required) - Name of the borrower
+    //   - amount: number (required, positive) - Requested loan amount
+    //   - purpose: string (required, size < 500) - Purpose of the loan
+    //   - status: string (required, enum: ["pending", "reviewing", "approved", "rejected"]) - Application status
+    //   - creditScore: number (optional, range 300-850) - Estimated credit score
+    //   - annualIncome: number (optional, positive) - Annual income
+    //   - createdAt: timestamp (required) - Creation time
+    //   - updatedAt: timestamp (required) - Last update time
+    //   - lenderNotes: string (optional, size < 1000) - Notes from the lender
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() &&
+        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+          (request.auth.token.email == "RCKONDA@gmail.com" && request.auth.token.email_verified == true));
+    }
+
+    function isLender() {
+      return isAuthenticated() && 
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'lender';
+    }
+
+    function hasRequiredFields(fields) {
+      return request.resource.data.keys().hasAll(fields);
+    }
+
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    function isValidEmail(email) {
+      return email is string && email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+    function isValidUser(data) {
+      return hasOnlyAllowedFields(['uid', 'email', 'displayName', 'role', 'createdAt']) &&
+             data.uid == request.auth.uid &&
+             isValidEmail(data.email) &&
+             data.role in ['borrower', 'lender', 'admin'] &&
+             data.createdAt is timestamp;
+    }
+
+    function isValidApplication(data) {
+      return hasRequiredFields(['borrowerId', 'borrowerName', 'amount', 'purpose', 'status', 'createdAt', 'updatedAt']) &&
+             data.borrowerId is string &&
+             data.borrowerName is string && data.borrowerName.size() > 0 && data.borrowerName.size() < 100 &&
+             data.amount is number && data.amount > 0 &&
+             data.purpose is string && data.purpose.size() > 0 && data.purpose.size() < 500 &&
+             data.status in ['pending', 'reviewing', 'approved', 'rejected'] &&
+             data.createdAt is timestamp &&
+             data.updatedAt is timestamp &&
+             (!('creditScore' in data) || (data.creditScore is number && data.creditScore >= 300 && data.creditScore <= 850)) &&
+             (!('annualIncome' in data) || (data.annualIncome is number && data.annualIncome >= 0)) &&
+             (!('lenderNotes' in data) || (data.lenderNotes is string && data.lenderNotes.size() < 1000));
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+    match /users/{userId} {
+      allow read: if isAuthenticated();
+      allow create: if isOwner(userId) && isValidUser(request.resource.data);
+      allow update: if (isOwner(userId) && isValidUser(request.resource.data) && request.resource.data.role == resource.data.role) || isAdmin();
+    }
+
+    match /applications/{applicationId} {
+      allow read: if isAuthenticated() && (request.auth.uid == resource.data.borrowerId || isLender() || isAdmin());
+      allow create: if isAuthenticated() && isValidApplication(request.resource.data) && request.resource.data.borrowerId == request.auth.uid;
+      allow update: if isAuthenticated() && isValidApplication(request.resource.data) && (
+        (request.auth.uid == resource.data.borrowerId && request.resource.data.status == resource.data.status) ||
+        isLender() || 
+        isAdmin()
+      );
+      allow delete: if isAdmin();
+    }
+  }
+}

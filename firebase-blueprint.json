@@ -1,0 +1,57 @@
+{
+  "entities": {
+    "User": {
+      "title": "User Profile",
+      "description": "User profile with role-based access.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "Firebase Auth UID" },
+        "email": { "type": "string", "format": "email" },
+        "displayName": { "type": "string" },
+        "role": { "type": "string", "enum": ["borrower", "lender"], "description": "The user's role in the system." },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email", "role"]
+    },
+    "LoanApplication": {
+      "title": "Loan Application",
+      "description": "A loan application submitted by a borrower.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "borrowerId": { "type": "string", "description": "UID of the borrower." },
+        "borrowerName": { "type": "string" },
+        "amount": { "type": "number", "description": "Requested loan amount." },
+        "purpose": { "type": "string", "description": "Purpose of the loan." },
+        "status": { "type": "string", "enum": ["pending", "reviewing", "approved", "rejected"], "default": "pending" },
+        "creditScore": { "type": "number", "description": "Estimated credit score." },
+        "annualIncome": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "lenderNotes": { "type": "string" },
+        "documents": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": { "type": "string" },
+              "url": { "type": "string", "format": "uri" },
+              "uploadedAt": { "type": "string", "format": "date-time" }
+            }
+          }
+        }
+      },
+      "required": ["borrowerId", "amount", "purpose", "status"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profiles."
+    },
+    "/applications/{applicationId}": {
+      "schema": "LoanApplication",
+      "description": "Loan applications."
+    }
+  }
+}

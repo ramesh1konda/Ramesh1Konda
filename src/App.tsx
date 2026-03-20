@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, Component } from 'react';
 import { AuthProvider, useAuth } from './components/AuthContext';
-import { UserRole, ApplicationStatus, LoanApplication, OperationType, UserProfile, LoanDocument, Asset, Liability, Applicant } from './types';
+import { UserRole, ApplicationStatus, LoanApplication, OperationType, UserProfile, LoanDocument, Asset, Liability, Applicant, NotificationPreferences } from './types';
 import { db, auth, storage } from './firebase';
 import { collection, addDoc, query, where, onSnapshot, serverTimestamp, doc, updateDoc, deleteDoc, getDocs, deleteField, Timestamp } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
@@ -46,7 +46,8 @@ import {
   CreditCard,
   Download,
   ArrowDownWideNarrow,
-  ArrowUpWideNarrow
+  ArrowUpWideNarrow,
+  Settings
 } from 'lucide-react';
 import { format, startOfDay, subDays, isSameDay } from 'date-fns';
 import { clsx, type ClassValue } from 'clsx';
@@ -132,6 +133,122 @@ class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
     return this.props.children;
   }
 }
+
+const SettingsView = () => {
+  const { profile, updateNotificationPreferences } = useAuth();
+  const [saving, setSaving] = useState(false);
+  const [prefs, setPrefs] = useState<NotificationPreferences>(
+    profile?.notificationPreferences || {
+      emailFrequency: 'instant',
+      applicationUpdates: true,
+      newProposals: true,
+      marketingEmails: false,
+    }
+  );
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      await updateNotificationPreferences(prefs);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="max-w-4xl mx-auto">
+      <header className="mb-12">
+        <h2 className="text-4xl font-bold tracking-tight text-zinc-900 mb-2">Settings</h2>
+        <p className="text-zinc-500">Manage your profile and notification preferences.</p>
+      </header>
+
+      <div className="space-y-8">
+        <section className="bg-white p-8 rounded-[2.5rem] border border-zinc-200 shadow-sm">
+          <h3 className="text-xl font-bold text-zinc-900 mb-6 flex items-center gap-2">
+            <Mail className="w-6 h-6" />
+            Email Notifications
+          </h3>
+          
+          <div className="space-y-6">
+            <div>
+              <label className="block text-sm font-bold text-zinc-400 uppercase tracking-wider mb-3">
+                Email Frequency
+              </label>
+              <select 
+                value={prefs.emailFrequency}
+                onChange={(e) => setPrefs({ ...prefs, emailFrequency: e.target.value as any })}
+                className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-zinc-900 transition-all"
+              >
+                <option value="instant">Instant</option>
+                <option value="daily">Daily Digest</option>
+                <option value="weekly">Weekly Summary</option>
+                <option value="none">None</option>
+              </select>
+            </div>
+
+            <div className="space-y-4 pt-4">
+              <label className="flex items-center gap-3 cursor-pointer group">
+                <div className="relative flex items-center">
+                  <input 
+                    type="checkbox"
+                    checked={prefs.applicationUpdates}
+                    onChange={(e) => setPrefs({ ...prefs, applicationUpdates: e.target.checked })}
+                    className="sr-only peer"
+                  />
+                  <div className="w-12 h-6 bg-zinc-200 rounded-full peer peer-checked:bg-zinc-900 transition-all after:content-[''] after:absolute after:top-1 after:left-1 after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-6" />
+                </div>
+                <span className="text-zinc-900 font-medium group-hover:text-zinc-600 transition-colors">
+                  Application Status Updates
+                </span>
+              </label>
+
+              <label className="flex items-center gap-3 cursor-pointer group">
+                <div className="relative flex items-center">
+                  <input 
+                    type="checkbox"
+                    checked={prefs.newProposals}
+                    onChange={(e) => setPrefs({ ...prefs, newProposals: e.target.checked })}
+                    className="sr-only peer"
+                  />
+                  <div className="w-12 h-6 bg-zinc-200 rounded-full peer peer-checked:bg-zinc-900 transition-all after:content-[''] after:absolute after:top-1 after:left-1 after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-6" />
+                </div>
+                <span className="text-zinc-900 font-medium group-hover:text-zinc-600 transition-colors">
+                  New Proposals & Messages
+                </span>
+              </label>
+
+              <label className="flex items-center gap-3 cursor-pointer group">
+                <div className="relative flex items-center">
+                  <input 
+                    type="checkbox"
+                    checked={prefs.marketingEmails}
+                    onChange={(e) => setPrefs({ ...prefs, marketingEmails: e.target.checked })}
+                    className="sr-only peer"
+                  />
+                  <div className="w-12 h-6 bg-zinc-200 rounded-full peer peer-checked:bg-zinc-900 transition-all after:content-[''] after:absolute after:top-1 after:left-1 after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:after:translate-x-6" />
+                </div>
+                <span className="text-zinc-900 font-medium group-hover:text-zinc-600 transition-colors">
+                  Marketing & Product Updates
+                </span>
+              </label>
+            </div>
+          </div>
+        </section>
+
+        <div className="flex justify-end">
+          <button 
+            onClick={handleSave}
+            disabled={saving}
+            className="px-8 py-4 bg-zinc-900 text-white rounded-2xl font-bold hover:bg-zinc-800 transition-all shadow-lg disabled:opacity-50 flex items-center gap-2"
+          >
+            {saving ? <Clock className="w-5 h-5 animate-spin" /> : <CheckCircle2 className="w-5 h-5" />}
+            {saving ? 'Saving Changes...' : 'Save Preferences'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
 
 const LandingPage = () => {
   const { signIn } = useAuth();
@@ -403,6 +520,7 @@ const ErrorMessage = ({ message }: { message?: string }) => {
 
 const BorrowerDashboard = () => {
   const { user, signOut } = useAuth();
+  const [view, setView] = useState<'dashboard' | 'settings'>('dashboard');
   const [applications, setApplications] = useState<LoanApplication[]>([]);
   const [showForm, setShowForm] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -565,21 +683,38 @@ const BorrowerDashboard = () => {
   });
 
   const uploadFiles = async (files: File[], borrowerId: string) => {
+    console.log('Starting upload for files:', files.map(f => f.name), 'Borrower ID:', borrowerId);
     try {
       const uploadPromises = files.map(async (file) => {
+        console.log('Uploading file:', file.name);
         const storageRef = ref(storage, `applications/${borrowerId}/${Date.now()}_${Math.random().toString(36).substring(7)}_${file.name}`);
-        await uploadBytes(storageRef, file);
+        
+        // Add a timeout to the upload process
+        const uploadTask = uploadBytes(storageRef, file);
+        const timeoutPromise = new Promise((_, reject) => 
+          setTimeout(() => reject(new Error(`Upload timed out for ${file.name} after 30 seconds`)), 30000)
+        );
+
+        console.log('Waiting for upload task or timeout for:', file.name);
+        await Promise.race([uploadTask, timeoutPromise]);
+        console.log('Upload task completed for:', file.name);
+        
         const url = await getDownloadURL(storageRef);
+        console.log('Download URL obtained for:', file.name, url);
+        
         return {
           name: file.name,
           url,
           uploadedAt: Timestamp.now()
         };
       });
-      return await Promise.all(uploadPromises);
+      const results = await Promise.all(uploadPromises);
+      console.log('All files uploaded successfully:', results);
+      return results;
     } catch (error) {
-      console.error('File upload error:', error);
-      setToast({ message: 'Failed to upload one or more files. Please try again.', type: 'error' });
+      console.error('File upload error details:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Failed to upload one or more files.';
+      setToast({ message: errorMessage, type: 'error' });
       throw error;
     }
   };
@@ -933,9 +1068,12 @@ const BorrowerDashboard = () => {
     if (!user) return;
     setUploadingDoc(appId);
     try {
-      const newDocs = await uploadFiles(files, user.uid);
       const app = applications.find(a => a.id === appId);
-      const currentDocs = app?.documents || [];
+      if (!app) throw new Error('Application not found');
+      
+      // Use the borrower's ID for the storage path, not the current user's (who might be a lender)
+      const newDocs = await uploadFiles(files, app.borrowerId);
+      const currentDocs = app.documents || [];
       
       await updateDoc(doc(db, 'applications', appId), {
         documents: [...currentDocs, ...newDocs],
@@ -943,6 +1081,12 @@ const BorrowerDashboard = () => {
       });
       setToast({ message: 'Documents uploaded successfully!', type: 'success' });
     } catch (error) {
+      console.error('Error adding document:', error);
+      if (error instanceof Error && error.message.includes('timed out')) {
+        // Already handled by uploadFiles toast
+      } else {
+        setToast({ message: 'Failed to update application with new documents.', type: 'error' });
+      }
       handleFirestoreError(error, OperationType.UPDATE, `applications/${appId}`);
     } finally {
       setUploadingDoc(null);
@@ -961,9 +1105,25 @@ const BorrowerDashboard = () => {
         </div>
 
         <nav className="flex-1 space-y-2">
-          <button className="w-full flex items-center gap-3 px-4 py-3 bg-zinc-100 text-zinc-900 rounded-xl font-medium">
+          <button 
+            onClick={() => setView('dashboard')}
+            className={cn(
+              "w-full flex items-center gap-3 px-4 py-3 rounded-xl font-medium transition-all",
+              view === 'dashboard' ? "bg-zinc-100 text-zinc-900" : "text-zinc-500 hover:text-zinc-900 hover:bg-zinc-50"
+            )}
+          >
             <LayoutDashboard className="w-5 h-5" />
             Dashboard
+          </button>
+          <button 
+            onClick={() => setView('settings')}
+            className={cn(
+              "w-full flex items-center gap-3 px-4 py-3 rounded-xl font-medium transition-all",
+              view === 'settings' ? "bg-zinc-100 text-zinc-900" : "text-zinc-500 hover:text-zinc-900 hover:bg-zinc-50"
+            )}
+          >
+            <Settings className="w-5 h-5" />
+            Settings
           </button>
         </nav>
 
@@ -987,7 +1147,11 @@ const BorrowerDashboard = () => {
 
       {/* Main Content */}
       <main className="flex-1 p-12 overflow-y-auto">
-        <header className="flex justify-between items-end mb-12">
+        {view === 'settings' ? (
+          <SettingsView />
+        ) : (
+          <>
+            <header className="flex justify-between items-end mb-12">
           <div>
             <h2 className="text-4xl font-bold tracking-tight text-zinc-900 mb-2">Welcome back</h2>
             <p className="text-zinc-500">Manage your loan applications and funding status.</p>
@@ -2308,6 +2472,8 @@ const BorrowerDashboard = () => {
             All loan applications are subject to responsible lending assessments and credit provider approval.
           </p>
         </div>
+        </>
+        )}
       </main>
 
       <AnimatePresence>
@@ -2465,7 +2631,7 @@ const LenderAnalytics = ({ applications }: { applications: LoanApplication[] }) 
 const LenderDashboard = () => {
   const { user, signOut } = useAuth();
   const [applications, setApplications] = useState<LoanApplication[]>([]);
-  const [view, setView] = useState<'queue' | 'analytics'>('queue');
+  const [view, setView] = useState<'queue' | 'analytics' | 'settings'>('queue');
   const [filter, setFilter] = useState<ApplicationStatus | 'all'>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [minAmount, setMinAmount] = useState('');
@@ -2620,6 +2786,16 @@ const LenderDashboard = () => {
             <BarChart3 className="w-5 h-5" />
             Analytics
           </button>
+          <button 
+            onClick={() => setView('settings')}
+            className={cn(
+              "w-full flex items-center gap-3 px-4 py-3 rounded-xl font-medium transition-all",
+              view === 'settings' ? "bg-zinc-100 text-zinc-900" : "text-zinc-500 hover:bg-zinc-50"
+            )}
+          >
+            <Settings className="w-5 h-5" />
+            Settings
+          </button>
         </nav>
 
         <div className="pt-8 border-t border-zinc-100">
@@ -2643,8 +2819,12 @@ const LenderDashboard = () => {
       </aside>
 
       <main className="flex-1 p-12 overflow-y-auto">
-        {view === 'queue' ? (
+        {view === 'settings' ? (
+          <SettingsView />
+        ) : (
           <>
+            {view === 'queue' ? (
+              <>
             <header className="flex flex-col gap-8 mb-12">
               <div className="flex justify-between items-end">
                 <div>
@@ -3245,6 +3425,8 @@ const LenderDashboard = () => {
             </div>
           )}
         </AnimatePresence>
+        </>
+        )}
       </main>
     </div>
   );
@@ -3254,7 +3436,7 @@ const AdminDashboard = () => {
   const { user, signOut } = useAuth();
   const [applications, setApplications] = useState<LoanApplication[]>([]);
   const [users, setUsers] = useState<UserProfile[]>([]);
-  const [view, setView] = useState<'overview' | 'applications' | 'users'>('overview');
+  const [view, setView] = useState<'overview' | 'applications' | 'users' | 'settings'>('overview');
   const [confirmDelete, setConfirmDelete] = useState<{ type: 'app' | 'user', id: string } | null>(null);
   const [selectedAdminApp, setSelectedAdminApp] = useState<LoanApplication | null>(null);
   const [activeAdminApplicantIndex, setActiveAdminApplicantIndex] = useState(0);
@@ -3502,6 +3684,16 @@ const AdminDashboard = () => {
             <Users className="w-5 h-5" />
             Users
           </button>
+          <button 
+            onClick={() => setView('settings')}
+            className={cn(
+              "w-full flex items-center gap-3 px-4 py-3 rounded-xl font-medium transition-all",
+              view === 'settings' ? "bg-zinc-900 text-white" : "text-zinc-500 hover:bg-zinc-50"
+            )}
+          >
+            <Settings className="w-5 h-5" />
+            Settings
+          </button>
         </nav>
 
         <div className="pt-8 border-t border-zinc-100">
@@ -3525,7 +3717,11 @@ const AdminDashboard = () => {
       </aside>
 
       <main className="flex-1 p-12 overflow-y-auto">
-        <header className="mb-12">
+        {view === 'settings' ? (
+          <SettingsView />
+        ) : (
+          <>
+            <header className="mb-12">
           <div className="flex justify-between items-start mb-8">
             <div>
               <h2 className="text-4xl font-bold tracking-tight text-zinc-900 mb-2">
@@ -4286,6 +4482,8 @@ const AdminDashboard = () => {
             </div>
           )}
         </AnimatePresence>
+        </>
+        )}
       </main>
     </div>
   );

@@ -1,8 +1,8 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { onAuthStateChanged, User } from 'firebase/auth';
-import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
+import { doc, getDoc, setDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { auth, db } from '../firebase';
-import { UserProfile, UserRole, OperationType } from '../types';
+import { UserProfile, UserRole, OperationType, NotificationPreferences } from '../types';
 import { handleFirestoreError } from '../utils/firestore';
 
 interface AuthContextType {
@@ -13,6 +13,7 @@ interface AuthContextType {
   signIn: () => Promise<void>;
   signOut: () => Promise<void>;
   updateProfile: (role: UserRole) => Promise<void>;
+  updateNotificationPreferences: (preferences: NotificationPreferences) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -74,8 +75,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
+  const updateNotificationPreferences = async (preferences: NotificationPreferences) => {
+    if (!user || !profile) return;
+    try {
+      await updateDoc(doc(db, 'users', user.uid), { notificationPreferences: preferences });
+      setProfile({ ...profile, notificationPreferences: preferences });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `users/${user.uid}`);
+    }
+  };
+
   return (
-    <AuthContext.Provider value={{ user, profile, loading, isAuthReady, signIn, signOut, updateProfile }}>
+    <AuthContext.Provider value={{ user, profile, loading, isAuthReady, signIn, signOut, updateProfile, updateNotificationPreferences }}>
       {children}
     </AuthContext.Provider>
   );

@@ -13,6 +13,11 @@ service cloud.firestore {
     //   - displayName: string (optional) - User's display name
     //   - role: string (required, enum: ["borrower", "lender"]) - The user's role
     //   - createdAt: timestamp (required) - Creation time
+    //   - notificationPreferences: object (optional) - User's notification settings
+    //     - emailFrequency: string (enum: ["instant", "daily", "weekly", "none"])
+    //     - applicationUpdates: boolean
+    //     - newProposals: boolean
+    //     - marketingEmails: boolean
     //
     // Collection: applications
     // Document ID: {applicationId}
@@ -68,11 +73,19 @@ service cloud.firestore {
     // Domain Validators
     // ===============================================================
     function isValidUser(data) {
-      return hasOnlyAllowedFields(['uid', 'email', 'displayName', 'role', 'createdAt']) &&
+      return hasOnlyAllowedFields(['uid', 'email', 'displayName', 'role', 'createdAt', 'notificationPreferences']) &&
              data.uid == request.auth.uid &&
              isValidEmail(data.email) &&
              data.role in ['borrower', 'lender', 'admin'] &&
-             data.createdAt is timestamp;
+             data.createdAt is timestamp &&
+             (!('notificationPreferences' in data) || (
+               data.notificationPreferences is map &&
+               data.notificationPreferences.keys().hasOnly(['emailFrequency', 'applicationUpdates', 'newProposals', 'marketingEmails']) &&
+               data.notificationPreferences.emailFrequency in ['instant', 'daily', 'weekly', 'none'] &&
+               data.notificationPreferences.applicationUpdates is bool &&
+               data.notificationPreferences.newProposals is bool &&
+               data.notificationPreferences.marketingEmails is bool
+             ));
     }
 
     function isValidApplication(data) {

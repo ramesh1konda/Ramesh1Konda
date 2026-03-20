@@ -9,7 +9,16 @@
         "email": { "type": "string", "format": "email" },
         "displayName": { "type": "string" },
         "role": { "type": "string", "enum": ["borrower", "lender"], "description": "The user's role in the system." },
-        "createdAt": { "type": "string", "format": "date-time" }
+        "createdAt": { "type": "string", "format": "date-time" },
+        "notificationPreferences": {
+          "type": "object",
+          "properties": {
+            "emailFrequency": { "type": "string", "enum": ["instant", "daily", "weekly", "none"] },
+            "applicationUpdates": { "type": "boolean" },
+            "newProposals": { "type": "boolean" },
+            "marketingEmails": { "type": "boolean" }
+          }
+        }
       },
       "required": ["uid", "email", "role"]
     },

@@ -6,12 +6,20 @@ export enum UserRole {
   ADMIN = 'admin',
 }
 
+export interface NotificationPreferences {
+  emailFrequency: 'instant' | 'daily' | 'weekly' | 'none';
+  applicationUpdates: boolean;
+  newProposals: boolean;
+  marketingEmails: boolean;
+}
+
 export interface UserProfile {
   uid: string;
   email: string;
   displayName?: string;
   role: UserRole;
   createdAt: Timestamp;
+  notificationPreferences?: NotificationPreferences;
 }
 
 export enum ApplicationStatus {

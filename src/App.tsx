@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, Component } from 'react';
 import { AuthProvider, useAuth } from './components/AuthContext';
 import { UserRole, ApplicationStatus, LoanApplication, OperationType, UserProfile, LoanDocument, Asset, Liability, Applicant } from './types';
 import { db, auth, storage } from './firebase';
-import { collection, addDoc, query, where, onSnapshot, serverTimestamp, doc, updateDoc, deleteDoc, getDocs } from 'firebase/firestore';
+import { collection, addDoc, query, where, onSnapshot, serverTimestamp, doc, updateDoc, deleteDoc, getDocs, deleteField, Timestamp } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { handleFirestoreError } from './utils/firestore';
 import { motion, AnimatePresence } from 'motion/react';
@@ -41,7 +41,12 @@ import {
   Baby,
   User,
   UserPlus,
-  Edit2
+  Edit2,
+  Edit3,
+  CreditCard,
+  Download,
+  ArrowDownWideNarrow,
+  ArrowUpWideNarrow
 } from 'lucide-react';
 import { format, startOfDay, subDays, isSameDay } from 'date-fns';
 import { clsx, type ClassValue } from 'clsx';
@@ -278,27 +283,41 @@ const DocumentList = ({ documents, onRemove }: { documents?: LoanDocument[], onR
   if (!documents || documents.length === 0) return null;
 
   return (
-    <div className="space-y-2">
+    <>
       {documents.map((doc, index) => (
-        <div key={index} className="flex items-center justify-between p-3 bg-zinc-50 rounded-xl border border-zinc-100 group">
-          <div className="flex items-center gap-3">
-            <FileText className="w-5 h-5 text-zinc-400" />
-            <div className="text-sm font-medium text-zinc-900 truncate max-w-[200px]">{doc.name}</div>
-          </div>
-          <div className="flex items-center gap-2">
+        <div key={index} className="flex items-center justify-between p-3 bg-zinc-50 rounded-xl border border-zinc-100 group hover:border-zinc-300 transition-all">
+          <div className="flex items-center gap-3 min-w-0 flex-1">
+            <FileText className="w-5 h-5 text-zinc-400 shrink-0" />
             <a 
               href={doc.url} 
               target="_blank" 
               rel="noopener noreferrer"
+              className="text-sm font-medium text-zinc-900 truncate hover:text-zinc-600 transition-colors"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {doc.name}
+            </a>
+          </div>
+          <div className="flex items-center gap-1 shrink-0">
+            <a 
+              href={doc.url} 
+              target="_blank" 
+              rel="noopener noreferrer"
+              download={doc.name}
               onClick={(e) => e.stopPropagation()}
               className="p-2 text-zinc-400 hover:text-zinc-900 transition-colors"
+              title="Download"
             >
-              <ExternalLink className="w-4 h-4" />
+              <Download className="w-4 h-4" />
             </a>
             {onRemove && (
               <button 
-                onClick={() => onRemove(index)}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onRemove(index);
+                }}
                 className="p-2 text-zinc-400 hover:text-red-600 transition-colors"
+                title="Remove"
               >
                 <Trash2 className="w-4 h-4" />
               </button>
@@ -306,7 +325,7 @@ const DocumentList = ({ documents, onRemove }: { documents?: LoanDocument[], onR
           </div>
         </div>
       ))}
-    </div>
+    </>
   );
 };
 
@@ -336,6 +355,7 @@ const DocumentUploadZone = ({ onUpload, loading }: { onUpload: (files: File[]) =
     e.preventDefault();
     if (e.target.files && e.target.files[0]) {
       onUpload(Array.from(e.target.files));
+      e.target.value = ''; // Reset for same file upload
     }
   };
 
@@ -368,13 +388,41 @@ const DocumentUploadZone = ({ onUpload, loading }: { onUpload: (files: File[]) =
   );
 };
 
+const ErrorMessage = ({ message }: { message?: string }) => {
+  if (!message) return null;
+  return (
+    <motion.p 
+      initial={{ opacity: 0, y: -5 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="text-[10px] font-bold text-red-500 mt-1 ml-1"
+    >
+      {message}
+    </motion.p>
+  );
+};
+
 const BorrowerDashboard = () => {
   const { user, signOut } = useAuth();
   const [applications, setApplications] = useState<LoanApplication[]>([]);
   const [showForm, setShowForm] = useState(false);
   const [loading, setLoading] = useState(false);
   const [uploadingDoc, setUploadingDoc] = useState<string | null>(null);
+  const [toast, setToast] = useState<{ message: string, type: 'success' | 'error' } | null>(null);
+
+  useEffect(() => {
+    if (toast) {
+      const timer = setTimeout(() => setToast(null), 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [toast]);
   const [selectedApp, setSelectedApp] = useState<LoanApplication | null>(null);
+
+  useEffect(() => {
+    if (selectedApp) {
+      setActiveApplicantIndex(0);
+    }
+  }, [selectedApp]);
+
   const [filter, setFilter] = useState<ApplicationStatus | 'all'>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [step, setStep] = useState(1);
@@ -413,13 +461,90 @@ const BorrowerDashboard = () => {
   const [monthlyExpenses, setMonthlyExpenses] = useState('');
   const [otherMonthlyDebts, setOtherMonthlyDebts] = useState('');
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [errors, setErrors] = useState<Record<string, string>>({});
+
+  const validateStep = (currentStep: number) => {
+    const newErrors: Record<string, string> = {};
+
+    if (currentStep === 1) {
+      if (!amount || Number(amount) <= 0) newErrors.amount = 'Please enter a valid loan amount greater than 0';
+      if (!purpose.trim()) newErrors.purpose = 'Please enter the purpose of the loan';
+      if (!loanTerm) newErrors.loanTerm = 'Please select a loan term';
+    }
+
+    if (currentStep === 2) {
+      if (!applicantName.trim()) newErrors.applicantName = 'Full name is required';
+      if (!applicantEmail.trim()) {
+        newErrors.applicantEmail = 'Email address is required';
+      } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(applicantEmail)) {
+        newErrors.applicantEmail = 'Please enter a valid email address';
+      }
+      if (!dob) {
+        newErrors.dob = 'Date of birth is required';
+      } else {
+        const birthDate = new Date(dob);
+        const today = new Date();
+        let age = today.getFullYear() - birthDate.getFullYear();
+        const m = today.getMonth() - birthDate.getMonth();
+        if (m < 0 || (m === 0 && today.getDate() < birthDate.getDate())) {
+          age--;
+        }
+        if (age < 18) newErrors.dob = 'Applicants must be at least 18 years old';
+      }
+      if (!gender) newErrors.gender = 'Please select a gender';
+      if (Number(dependents) < 0) newErrors.dependents = 'Number of dependents cannot be negative';
+    }
+
+    if (currentStep === 3) {
+      if (!phone.trim()) {
+        newErrors.phone = 'Phone number is required';
+      } else if (!/^[\d\s+()-]{8,20}$/.test(phone)) {
+        newErrors.phone = 'Please enter a valid phone number';
+      }
+      if (!address.trim()) newErrors.address = 'Current address is required';
+    }
+
+    if (currentStep === 4) {
+      if (!baseIncome || Number(baseIncome) < 0) newErrors.baseIncome = 'Please enter a valid base income';
+      if (!employerName.trim()) newErrors.employerName = 'Employer name is required';
+      if (!jobTitle.trim()) newErrors.jobTitle = 'Job title is required';
+      if (!yearsAtJob || Number(yearsAtJob) < 0) newErrors.yearsAtJob = 'Please enter valid years at job';
+    }
+
+    if (currentStep === 5) {
+      if (!monthlyExpenses || Number(monthlyExpenses) < 0) newErrors.monthlyExpenses = 'Please enter valid monthly expenses';
+    }
+
+    if (currentStep === 6) {
+      if (!credit || Number(credit) < 0 || Number(credit) > 1200) {
+        newErrors.credit = 'Please enter a valid credit score between 0 and 1200';
+      }
+    }
+
+    setErrors(newErrors);
+    return Object.keys(newErrors).length === 0;
+  };
+
+  const clearError = (field: string) => {
+    if (errors[field]) {
+      setErrors(prev => {
+        const next = { ...prev };
+        delete next[field];
+        return next;
+      });
+    }
+  };
 
   useEffect(() => {
     if (!user) return;
     const q = query(collection(db, 'applications'), where('borrowerId', '==', user.uid));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const apps = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as LoanApplication));
-      setApplications(apps.sort((a, b) => b.createdAt.toMillis() - a.createdAt.toMillis()));
+      setApplications(apps.sort((a, b) => {
+        const t1 = a.createdAt?.toMillis?.() || Date.now();
+        const t2 = b.createdAt?.toMillis?.() || Date.now();
+        return t2 - t1;
+      }));
     }, (error) => {
       handleFirestoreError(error, OperationType.LIST, 'applications');
     });
@@ -440,18 +565,23 @@ const BorrowerDashboard = () => {
   });
 
   const uploadFiles = async (files: File[], borrowerId: string) => {
-    const uploadedDocs = [];
-    for (const file of files) {
-      const storageRef = ref(storage, `applications/${borrowerId}/${Date.now()}_${file.name}`);
-      await uploadBytes(storageRef, file);
-      const url = await getDownloadURL(storageRef);
-      uploadedDocs.push({
-        name: file.name,
-        url,
-        uploadedAt: new Date()
+    try {
+      const uploadPromises = files.map(async (file) => {
+        const storageRef = ref(storage, `applications/${borrowerId}/${Date.now()}_${Math.random().toString(36).substring(7)}_${file.name}`);
+        await uploadBytes(storageRef, file);
+        const url = await getDownloadURL(storageRef);
+        return {
+          name: file.name,
+          url,
+          uploadedAt: Timestamp.now()
+        };
       });
+      return await Promise.all(uploadPromises);
+    } catch (error) {
+      console.error('File upload error:', error);
+      setToast({ message: 'Failed to upload one or more files. Please try again.', type: 'error' });
+      throw error;
     }
-    return uploadedDocs;
   };
 
   useEffect(() => {
@@ -543,6 +673,7 @@ const BorrowerDashboard = () => {
   };
 
   const handleSwitchApplicant = (index: number) => {
+    if (!validateStep(step)) return;
     const currentData = getCurrentApplicantData();
     const newApplicants = [...applicants];
     newApplicants[activeApplicantIndex] = currentData;
@@ -554,6 +685,7 @@ const BorrowerDashboard = () => {
 
   const handleAddApplicant = () => {
     if (applicants.length >= 4) return;
+    if (!validateStep(step)) return;
     const currentData = getCurrentApplicantData();
     const newApplicants = [...applicants];
     newApplicants[activeApplicantIndex] = currentData;
@@ -580,9 +712,41 @@ const BorrowerDashboard = () => {
     loadApplicantData(newApplicants[nextIndex]);
   };
 
+  const handleAcceptProposal = async (app: LoanApplication) => {
+    if (!app.proposedModifications) return;
+    try {
+      await updateDoc(doc(db, 'applications', app.id), {
+        amount: app.proposedModifications.amount,
+        loanTerm: app.proposedModifications.loanTerm,
+        status: ApplicationStatus.APPROVED,
+        lenderNotes: `Borrower accepted proposed modifications: $${app.proposedModifications.amount.toLocaleString()} for ${app.proposedModifications.loanTerm} months.`,
+        proposedModifications: deleteField(),
+        updatedAt: serverTimestamp(),
+      });
+      setSelectedApp(null);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `applications/${app.id}`);
+    }
+  };
+
+  const handleRejectProposal = async (app: LoanApplication) => {
+    try {
+      await updateDoc(doc(db, 'applications', app.id), {
+        status: ApplicationStatus.REVIEWING,
+        lenderNotes: `Borrower rejected proposed modifications.`,
+        proposedModifications: deleteField(),
+        updatedAt: serverTimestamp(),
+      });
+      setSelectedApp(null);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `applications/${app.id}`);
+    }
+  };
+
   const resetForm = () => {
     setEditingAppId(null);
     setStep(1);
+    setErrors({});
     setAmount('');
     setPurpose('');
     setLoanTerm('36');
@@ -687,11 +851,13 @@ const BorrowerDashboard = () => {
     }
     
     setShowForm(true);
+    setSelectedApp(null);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!user) return;
+    if (!validateStep(6)) return;
     setLoading(true);
     try {
       const uploadedDocs = await uploadFiles(selectedFiles, user.uid);
@@ -775,6 +941,7 @@ const BorrowerDashboard = () => {
         documents: [...currentDocs, ...newDocs],
         updatedAt: serverTimestamp(),
       });
+      setToast({ message: 'Documents uploaded successfully!', type: 'success' });
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, `applications/${appId}`);
     } finally {
@@ -923,10 +1090,12 @@ const BorrowerDashboard = () => {
                           "w-14 h-14 rounded-2xl flex items-center justify-center",
                           app.status === ApplicationStatus.APPROVED ? "bg-emerald-50 text-emerald-600" :
                           app.status === ApplicationStatus.REJECTED ? "bg-red-50 text-red-600" :
+                          app.status === ApplicationStatus.PROPOSED ? "bg-amber-50 text-amber-600" :
                           "bg-zinc-50 text-zinc-400"
                         )}>
                           {app.status === ApplicationStatus.APPROVED ? <CheckCircle2 className="w-7 h-7" /> :
                            app.status === ApplicationStatus.REJECTED ? <XCircle className="w-7 h-7" /> :
+                           app.status === ApplicationStatus.PROPOSED ? <AlertCircle className="w-7 h-7" /> :
                            <Clock className="w-7 h-7" />}
                         </div>
                         <div>
@@ -946,6 +1115,7 @@ const BorrowerDashboard = () => {
                             "text-sm font-bold px-3 py-1 rounded-full inline-block",
                             app.status === ApplicationStatus.APPROVED ? "bg-emerald-100 text-emerald-700" :
                             app.status === ApplicationStatus.REJECTED ? "bg-red-100 text-red-700" :
+                            app.status === ApplicationStatus.PROPOSED ? "bg-amber-100 text-amber-700" :
                             "bg-zinc-100 text-zinc-600"
                           )}>
                             {app.status.charAt(0).toUpperCase() + app.status.slice(1)}
@@ -954,7 +1124,7 @@ const BorrowerDashboard = () => {
                         <div className="text-right min-w-[120px]">
                           <div className="text-xs font-bold text-zinc-400 uppercase tracking-wider mb-1">Submitted</div>
                           <div className="text-sm font-medium text-zinc-900">
-                            {format(app.createdAt.toDate(), 'dd MMM yyyy')}
+                            {app.createdAt?.toDate ? format(app.createdAt.toDate(), 'dd MMM yyyy') : '...'}
                           </div>
                         </div>
                         <button 
@@ -989,17 +1159,71 @@ const BorrowerDashboard = () => {
                             "absolute inset-y-0 left-0 transition-all duration-500",
                             app.status === ApplicationStatus.APPROVED ? "w-full bg-emerald-500" :
                             app.status === ApplicationStatus.REJECTED ? "w-full bg-red-500" :
+                            app.status === ApplicationStatus.PROPOSED ? "w-4/5 bg-amber-500" :
                             app.status === ApplicationStatus.REVIEWING ? "w-2/3 bg-zinc-900" :
                             "w-1/3 bg-zinc-400"
                           )}
                         />
                       </div>
                       <div className="flex gap-8 text-[10px] font-bold text-zinc-400 uppercase tracking-widest">
-                        <span className={cn(app.status === ApplicationStatus.PENDING || app.status === ApplicationStatus.REVIEWING || app.status === ApplicationStatus.APPROVED ? "text-zinc-900" : "")}>Submitted</span>
-                        <span className={cn(app.status === ApplicationStatus.REVIEWING || app.status === ApplicationStatus.APPROVED ? "text-zinc-900" : "")}>Reviewing</span>
-                        <span className={cn(app.status === ApplicationStatus.APPROVED || app.status === ApplicationStatus.REJECTED ? (app.status === ApplicationStatus.APPROVED ? "text-emerald-600" : "text-red-600") : "")}>Decision</span>
+                        <span className={cn(app.status === ApplicationStatus.PENDING || app.status === ApplicationStatus.REVIEWING || app.status === ApplicationStatus.PROPOSED || app.status === ApplicationStatus.APPROVED ? "text-zinc-900" : "")}>Submitted</span>
+                        <span className={cn(app.status === ApplicationStatus.REVIEWING || app.status === ApplicationStatus.PROPOSED || app.status === ApplicationStatus.APPROVED ? "text-zinc-900" : "")}>Reviewing</span>
+                        <span className={cn(app.status === ApplicationStatus.APPROVED || app.status === ApplicationStatus.REJECTED ? (app.status === ApplicationStatus.APPROVED ? "text-emerald-600" : "text-red-600") : app.status === ApplicationStatus.PROPOSED ? "text-amber-600" : "")}>Decision</span>
                       </div>
                     </div>
+
+                    {app.status === ApplicationStatus.PROPOSED && app.proposedModifications && (
+                      <div className="mt-6 p-6 bg-amber-50 rounded-[2rem] border border-amber-200">
+                        <div className="flex items-center justify-between mb-4">
+                          <div className="flex items-center gap-3">
+                            <div className="w-10 h-10 rounded-full bg-amber-100 flex items-center justify-center">
+                              <AlertCircle className="w-5 h-5 text-amber-600" />
+                            </div>
+                            <div>
+                              <div className="text-sm font-bold text-amber-900">Modification Proposed</div>
+                              <div className="text-xs text-amber-700">A lender has suggested changes to your application.</div>
+                            </div>
+                          </div>
+                          <div className="flex gap-3">
+                            <button 
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleRejectProposal(app);
+                              }}
+                              className="px-4 py-2 bg-white text-red-600 border border-red-100 rounded-xl text-xs font-bold hover:bg-red-50 transition-all"
+                            >
+                              Reject Changes
+                            </button>
+                            <button 
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleAcceptProposal(app);
+                              }}
+                              className="px-4 py-2 bg-amber-600 text-white rounded-xl text-xs font-bold hover:bg-amber-700 transition-all shadow-lg shadow-amber-200"
+                            >
+                              Accept Changes
+                            </button>
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-2 gap-4">
+                          <div className="p-4 bg-white rounded-2xl border border-amber-100">
+                            <div className="text-[10px] font-bold text-amber-400 uppercase tracking-widest mb-1">Proposed Amount</div>
+                            <div className="text-lg font-bold text-amber-900">${app.proposedModifications.amount.toLocaleString()}</div>
+                            <div className="text-[10px] text-amber-500 line-through">Original: ${app.amount.toLocaleString()}</div>
+                          </div>
+                          <div className="p-4 bg-white rounded-2xl border border-amber-100">
+                            <div className="text-[10px] font-bold text-amber-400 uppercase tracking-widest mb-1">Proposed Term</div>
+                            <div className="text-lg font-bold text-amber-900">{app.proposedModifications.loanTerm} Months</div>
+                            <div className="text-[10px] text-amber-500 line-through">Original: {app.loanTerm} Months</div>
+                          </div>
+                        </div>
+                        {app.proposedModifications.notes && (
+                          <div className="mt-4 text-sm text-amber-800 bg-white/50 p-4 rounded-xl border border-amber-100">
+                            <strong>Lender Note:</strong> {app.proposedModifications.notes}
+                          </div>
+                        )}
+                      </div>
+                    )}
 
                     {/* Documents Section */}
                     <div className="pt-6 border-t border-zinc-100">
@@ -1012,7 +1236,12 @@ const BorrowerDashboard = () => {
                           <input
                             type="file"
                             multiple
-                            onChange={(e) => e.target.files && handleAddDocumentToExisting(app.id, Array.from(e.target.files))}
+                            onChange={(e) => {
+                              if (e.target.files) {
+                                handleAddDocumentToExisting(app.id, Array.from(e.target.files));
+                                e.target.value = '';
+                              }
+                            }}
                             className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
                             disabled={uploadingDoc === app.id}
                           />
@@ -1135,17 +1364,30 @@ const BorrowerDashboard = () => {
                               required
                               type="number"
                               value={amount}
-                              onChange={(e) => setAmount(e.target.value)}
+                              onChange={(e) => {
+                                setAmount(e.target.value);
+                                clearError('amount');
+                              }}
                               placeholder="e.g. 25000"
-                              className="w-full px-5 py-4 bg-zinc-50 border border-zinc-200 rounded-2xl focus:outline-none focus:ring-2 focus:ring-zinc-900 transition-all"
+                              className={cn(
+                                "w-full px-5 py-4 bg-zinc-50 border rounded-2xl focus:outline-none focus:ring-2 transition-all",
+                                errors.amount ? "border-red-500 focus:ring-red-500" : "border-zinc-200 focus:ring-zinc-900"
+                              )}
                             />
+                            <ErrorMessage message={errors.amount} />
                           </div>
                           <div className="space-y-2">
                             <label className="text-xs font-bold text-zinc-400 uppercase tracking-wider">Loan Term (Months)</label>
                             <select 
                               value={loanTerm}
-                              onChange={(e) => setLoanTerm(e.target.value)}
-                              className="w-full px-5 py-4 bg-zinc-50 border border-zinc-200 rounded-2xl focus:outline-none focus:ring-2 focus:ring-zinc-900 transition-all"
+                              onChange={(e) => {
+                                setLoanTerm(e.target.value);
+                                clearError('loanTerm');
+                              }}
+                              className={cn(
+                                "w-full px-5 py-4 bg-zinc-50 border rounded-2xl focus:outline-none focus:ring-2 transition-all",
+                                errors.loanTerm ? "border-red-500 focus:ring-red-500" : "border-zinc-200 focus:ring-zinc-900"
+                              )}
                             >
                               <option value="12">12 Months</option>
                               <option value="24">24 Months</option>
@@ -1153,6 +1395,7 @@ const BorrowerDashboard = () => {
                               <option value="48">48 Months</option>
                               <option value="60">60 Months</option>
                             </select>
+                            <ErrorMessage message={errors.loanTerm} />
                           </div>
                         </div>
                         <div className="space-y-2">
@@ -1161,10 +1404,17 @@ const BorrowerDashboard = () => {
                             required
                             type="text"
                             value={purpose}
-                            onChange={(e) => setPurpose(e.target.value)}
+                            onChange={(e) => {
+                              setPurpose(e.target.value);
+                              clearError('purpose');
+                            }}
                             placeholder="e.g. Business Expansion"
-                            className="w-full px-5 py-4 bg-zinc-50 border border-zinc-200 rounded-2xl focus:outline-none focus:ring-2 focus:ring-zinc-900 transition-all"
+                            className={cn(
+                              "w-full px-5 py-4 bg-zinc-50 border rounded-2xl focus:outline-none focus:ring-2 transition-all",
+                              errors.purpose ? "border-red-500 focus:ring-red-500" : "border-zinc-200 focus:ring-zinc-900"
+                            )}
                           />
+                          <ErrorMessage message={errors.purpose} />
                         </div>
                       </motion.div>
                     )}
@@ -1182,10 +1432,17 @@ const BorrowerDashboard = () => {
                               required
                               type="text"
                               value={applicantName}
-                              onChange={(e) => setApplicantName(e.target.value)}
+                              onChange={(e) => {
+                                setApplicantName(e.target.value);
+                                clearError('applicantName');
+                              }}
                               placeholder="Applicant Full Name"
-                              className="w-full px-5 py-4 bg-zinc-50 border border-zinc-200 rounded-2xl focus:outline-none focus:ring-2 focus:ring-zinc-900 transition-all"
+                              className={cn(
+                                "w-full px-5 py-4 bg-zinc-50 border rounded-2xl focus:outline-none focus:ring-2 transition-all",
+                                errors.applicantName ? "border-red-500 focus:ring-red-500" : "border-zinc-200 focus:ring-zinc-900"
+                              )}
                             />
+                            <ErrorMessage message={errors.applicantName} />
                           </div>
                           <div className="space-y-2">
                             <label className="text-xs font-bold text-zinc-400 uppercase tracking-wider">Email Address</label>
@@ -1193,10 +1450,17 @@ const BorrowerDashboard = () => {
                               required
                               type="email"
                               value={applicantEmail}
-                              onChange={(e) => setApplicantEmail(e.target.value)}
+                              onChange={(e) => {
+                                setApplicantEmail(e.target.value);
+                                clearError('applicantEmail');
+                              }}
                               placeholder="applicant@example.com"
-                              className="w-full px-5 py-4 bg-zinc-50 border border-zinc-200 rounded-2xl focus:outline-none focus:ring-2 focus:ring-zinc-900 transition-all"
+                              className={cn(
+                                "w-full px-5 py-4 bg-zinc-50 border rounded-2xl focus:outline-none focus:ring-2 transition-all",
+                                errors.applicantEmail ? "border-red-500 focus:ring-red-500" : "border-zinc-200 focus:ring-zinc-900"
+                              )}
                             />
+                            <ErrorMessage message={errors.applicantEmail} />
                           </div>
                         </div>
                         <div className="grid grid-cols-2 gap-6">
@@ -1204,8 +1468,14 @@ const BorrowerDashboard = () => {
                             <label className="text-xs font-bold text-zinc-400 uppercase tracking-wider">Gender</label>
                             <select 
                               value={gender}
-                              onChange={(e) => setGender(e.target.value)}
-                              className="w-full px-5 py-4 bg-zinc-50 border border-zinc-200 rounded-2xl focus:outline-none focus:ring-2 focus:ring-zinc-900 transition-all"
+                              onChange={(e) => {
+                                setGender(e.target.value);
+                                clearError('gender');
+                              }}
+                              className={cn(
+                                "w-full px-5 py-4 bg-zinc-50 border rounded-2xl focus:outline-none focus:ring-2 transition-all",
+                                errors.gender ? "border-red-500 focus:ring-red-500" : "border-zinc-200 focus:ring-zinc-900"
+                              )}
                             >
                               <option value="">Select Gender</option>
                               <option value="Male">Male</option>
@@ -1213,6 +1483,7 @@ const BorrowerDashboard = () => {
                               <option value="Other">Other</option>
                               <option value="Prefer not to say">Prefer not to say</option>
                             </select>
+                            <ErrorMessage message={errors.gender} />
                           </div>
                           <div className="space-y-2">
                             <label className="text-xs font-bold text-zinc-400 uppercase tracking-wider">Date of Birth</label>
@@ -1220,9 +1491,16 @@ const BorrowerDashboard = () => {
                               required
                               type="date"
                               value={dob}
-                              onChange={(e) => setDob(e.target.value)}
-                              className="w-full px-5 py-4 bg-zinc-50 border border-zinc-200 rounded-2xl focus:outline-none focus:ring-2 focus:ring-zinc-900 transition-all"
+                              onChange={(e) => {
+                                setDob(e.target.value);
+                                clearError('dob');
+                              }}
+                              className={cn(
+                                "w-full px-5 py-4 bg-zinc-50 border rounded-2xl focus:outline-none focus:ring-2 transition-all",
+                                errors.dob ? "border-red-500 focus:ring-red-500" : "border-zinc-200 focus:ring-zinc-900"
+                              )}
                             />
+                            <ErrorMessage message={errors.dob} />
                           </div>
                         </div>
                         <div className="grid grid-cols-2 gap-6">
@@ -1247,9 +1525,16 @@ const BorrowerDashboard = () => {
                               type="number"
                               min="0"
                               value={dependents}
-                              onChange={(e) => setDependents(e.target.value)}
-                              className="w-full px-5 py-4 bg-zinc-50 border border-zinc-200 rounded-2xl focus:outline-none focus:ring-2 focus:ring-zinc-900 transition-all"
+                              onChange={(e) => {
+                                setDependents(e.target.value);
+                                clearError('dependents');
+                              }}
+                              className={cn(
+                                "w-full px-5 py-4 bg-zinc-50 border rounded-2xl focus:outline-none focus:ring-2 transition-all",
+                                errors.dependents ? "border-red-500 focus:ring-red-500" : "border-zinc-200 focus:ring-zinc-900"
+                              )}
                             />
+                            <ErrorMessage message={errors.dependents} />
                           </div>
                         </div>
                       </motion.div>
@@ -1267,21 +1552,35 @@ const BorrowerDashboard = () => {
                             required
                             type="tel"
                             value={phone}
-                            onChange={(e) => setPhone(e.target.value)}
+                            onChange={(e) => {
+                              setPhone(e.target.value);
+                              clearError('phone');
+                            }}
                             placeholder="+61 400 000 000 or +64 20 000 0000"
-                            className="w-full px-5 py-4 bg-zinc-50 border border-zinc-200 rounded-2xl focus:outline-none focus:ring-2 focus:ring-zinc-900 transition-all"
+                            className={cn(
+                              "w-full px-5 py-4 bg-zinc-50 border rounded-2xl focus:outline-none focus:ring-2 transition-all",
+                              errors.phone ? "border-red-500 focus:ring-red-500" : "border-zinc-200 focus:ring-zinc-900"
+                            )}
                           />
+                          <ErrorMessage message={errors.phone} />
                         </div>
                         <div className="space-y-2">
                           <label className="text-xs font-bold text-zinc-400 uppercase tracking-wider">Current Address</label>
                           <textarea 
                             required
                             value={address}
-                            onChange={(e) => setAddress(e.target.value)}
+                            onChange={(e) => {
+                              setAddress(e.target.value);
+                              clearError('address');
+                            }}
                             placeholder="Street, Suburb, State/Territory, Postcode"
                             rows={3}
-                            className="w-full px-5 py-4 bg-zinc-50 border border-zinc-200 rounded-2xl focus:outline-none focus:ring-2 focus:ring-zinc-900 transition-all resize-none"
+                            className={cn(
+                              "w-full px-5 py-4 bg-zinc-50 border rounded-2xl focus:outline-none focus:ring-2 transition-all resize-none",
+                              errors.address ? "border-red-500 focus:ring-red-500" : "border-zinc-200 focus:ring-zinc-900"
+                            )}
                           />
+                          <ErrorMessage message={errors.address} />
                         </div>
                       </motion.div>
                     )}
@@ -1299,10 +1598,17 @@ const BorrowerDashboard = () => {
                               required
                               type="number"
                               value={baseIncome}
-                              onChange={(e) => setBaseIncome(e.target.value)}
+                              onChange={(e) => {
+                                setBaseIncome(e.target.value);
+                                clearError('baseIncome');
+                              }}
                               placeholder="e.g. 75000"
-                              className="w-full px-5 py-4 bg-zinc-50 border border-zinc-200 rounded-2xl focus:outline-none focus:ring-2 focus:ring-zinc-900 transition-all"
+                              className={cn(
+                                "w-full px-5 py-4 bg-zinc-50 border rounded-2xl focus:outline-none focus:ring-2 transition-all",
+                                errors.baseIncome ? "border-red-500 focus:ring-red-500" : "border-zinc-200 focus:ring-zinc-900"
+                              )}
                             />
+                            <ErrorMessage message={errors.baseIncome} />
                           </div>
                           <div className="space-y-2">
                             <label className="text-xs font-bold text-zinc-400 uppercase tracking-wider">Bonus/Commissions ($)</label>
@@ -1360,10 +1666,17 @@ const BorrowerDashboard = () => {
                             required
                             type="text"
                             value={employerName}
-                            onChange={(e) => setEmployerName(e.target.value)}
+                            onChange={(e) => {
+                              setEmployerName(e.target.value);
+                              clearError('employerName');
+                            }}
                             placeholder="Company Name"
-                            className="w-full px-5 py-4 bg-zinc-50 border border-zinc-200 rounded-2xl focus:outline-none focus:ring-2 focus:ring-zinc-900 transition-all"
+                            className={cn(
+                              "w-full px-5 py-4 bg-zinc-50 border rounded-2xl focus:outline-none focus:ring-2 transition-all",
+                              errors.employerName ? "border-red-500 focus:ring-red-500" : "border-zinc-200 focus:ring-zinc-900"
+                            )}
                           />
+                          <ErrorMessage message={errors.employerName} />
                         </div>
                         <div className="grid grid-cols-2 gap-6">
                           <div className="space-y-2">
@@ -1372,10 +1685,17 @@ const BorrowerDashboard = () => {
                               required
                               type="text"
                               value={jobTitle}
-                              onChange={(e) => setJobTitle(e.target.value)}
+                              onChange={(e) => {
+                                setJobTitle(e.target.value);
+                                clearError('jobTitle');
+                              }}
                               placeholder="e.g. Software Engineer"
-                              className="w-full px-5 py-4 bg-zinc-50 border border-zinc-200 rounded-2xl focus:outline-none focus:ring-2 focus:ring-zinc-900 transition-all"
+                              className={cn(
+                                "w-full px-5 py-4 bg-zinc-50 border rounded-2xl focus:outline-none focus:ring-2 transition-all",
+                                errors.jobTitle ? "border-red-500 focus:ring-red-500" : "border-zinc-200 focus:ring-zinc-900"
+                              )}
                             />
+                            <ErrorMessage message={errors.jobTitle} />
                           </div>
                           <div className="space-y-2">
                             <label className="text-xs font-bold text-zinc-400 uppercase tracking-wider">Years at Job</label>
@@ -1383,10 +1703,17 @@ const BorrowerDashboard = () => {
                               required
                               type="number"
                               value={yearsAtJob}
-                              onChange={(e) => setYearsAtJob(e.target.value)}
+                              onChange={(e) => {
+                                setYearsAtJob(e.target.value);
+                                clearError('yearsAtJob');
+                              }}
                               placeholder="e.g. 3"
-                              className="w-full px-5 py-4 bg-zinc-50 border border-zinc-200 rounded-2xl focus:outline-none focus:ring-2 focus:ring-zinc-900 transition-all"
+                              className={cn(
+                                "w-full px-5 py-4 bg-zinc-50 border rounded-2xl focus:outline-none focus:ring-2 transition-all",
+                                errors.yearsAtJob ? "border-red-500 focus:ring-red-500" : "border-zinc-200 focus:ring-zinc-900"
+                              )}
                             />
+                            <ErrorMessage message={errors.yearsAtJob} />
                           </div>
                         </div>
                       </motion.div>
@@ -1547,10 +1874,17 @@ const BorrowerDashboard = () => {
                             required
                             type="number"
                             value={monthlyExpenses}
-                            onChange={(e) => setMonthlyExpenses(e.target.value)}
+                            onChange={(e) => {
+                              setMonthlyExpenses(e.target.value);
+                              clearError('monthlyExpenses');
+                            }}
                             placeholder="e.g. 2500"
-                            className="w-full px-5 py-4 bg-zinc-50 border border-zinc-200 rounded-2xl focus:outline-none focus:ring-2 focus:ring-zinc-900 transition-all"
+                            className={cn(
+                              "w-full px-5 py-4 bg-zinc-50 border rounded-2xl focus:outline-none focus:ring-2 transition-all",
+                              errors.monthlyExpenses ? "border-red-500 focus:ring-red-500" : "border-zinc-200 focus:ring-zinc-900"
+                            )}
                           />
+                          <ErrorMessage message={errors.monthlyExpenses} />
                         </div>
                       </motion.div>
                     )}
@@ -1569,14 +1903,44 @@ const BorrowerDashboard = () => {
                             min="0"
                             max="1200"
                             value={credit}
-                            onChange={(e) => setCredit(e.target.value)}
+                            onChange={(e) => {
+                              setCredit(e.target.value);
+                              clearError('credit');
+                            }}
                             placeholder="0 - 1200"
-                            className="w-full px-5 py-4 bg-zinc-50 border border-zinc-200 rounded-2xl focus:outline-none focus:ring-2 focus:ring-zinc-900 transition-all"
+                            className={cn(
+                              "w-full px-5 py-4 bg-zinc-50 border rounded-2xl focus:outline-none focus:ring-2 transition-all",
+                              errors.credit ? "border-red-500 focus:ring-red-500" : "border-zinc-200 focus:ring-zinc-900"
+                            )}
                           />
+                          <ErrorMessage message={errors.credit} />
                         </div>
 
                         <div className="space-y-2">
                           <label className="text-xs font-bold text-zinc-400 uppercase tracking-wider">Supporting Documents</label>
+                          
+                          {editingAppId && applications.find(a => a.id === editingAppId)?.documents?.length ? (
+                            <div className="mb-4 space-y-2">
+                              <label className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider">Existing Documents</label>
+                              <div className="grid grid-cols-1 gap-2">
+                                <DocumentList 
+                                  documents={applications.find(a => a.id === editingAppId)?.documents} 
+                                  onRemove={(idx) => {
+                                    const app = applications.find(a => a.id === editingAppId);
+                                    if (app && app.documents) {
+                                      const newDocs = [...app.documents];
+                                      newDocs.splice(idx, 1);
+                                      updateDoc(doc(db, 'applications', editingAppId), {
+                                        documents: newDocs,
+                                        updatedAt: serverTimestamp()
+                                      });
+                                    }
+                                  }}
+                                />
+                              </div>
+                            </div>
+                          ) : null}
+
                           <DocumentUploadZone 
                             loading={loading}
                             onUpload={(files) => setSelectedFiles(prev => [...prev, ...files])}
@@ -1629,7 +1993,11 @@ const BorrowerDashboard = () => {
                       {step < 6 ? (
                         <button 
                           type="button"
-                          onClick={() => setStep(prev => prev + 1)}
+                          onClick={() => {
+                            if (validateStep(step)) {
+                              setStep(prev => prev + 1);
+                            }
+                          }}
                           className="flex-1 py-4 bg-zinc-900 text-white rounded-2xl font-bold hover:bg-zinc-800 transition-all"
                         >
                           Continue
@@ -1673,11 +2041,11 @@ const BorrowerDashboard = () => {
                 exit={{ opacity: 0, scale: 0.95, y: 20 }}
                 className="relative bg-white w-full max-w-2xl rounded-[2.5rem] shadow-2xl overflow-hidden"
               >
-                <div className="p-10">
+                <div className="p-10 max-h-[90vh] overflow-y-auto">
                   <div className="flex justify-between items-start mb-8">
                     <div>
                       <h3 className="text-3xl font-bold text-zinc-900 mb-1">Application Details</h3>
-                      <p className="text-zinc-500">Submitted on {format(selectedApp.createdAt.toDate(), 'dd MMMM yyyy')}</p>
+                      <p className="text-zinc-500">Submitted on {selectedApp.createdAt?.toDate ? format(selectedApp.createdAt.toDate(), 'dd MMMM yyyy') : '...'}</p>
                     </div>
                     <div className="text-right">
                       <div className="text-3xl font-bold text-zinc-900">${selectedApp.amount.toLocaleString()}</div>
@@ -1685,60 +2053,169 @@ const BorrowerDashboard = () => {
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-2 gap-8 mb-8">
-                    <div className="p-6 bg-zinc-50 rounded-3xl border border-zinc-100">
-                      <div className="text-xs font-bold text-zinc-400 uppercase tracking-wider mb-2">Credit Score</div>
-                      <div className="text-2xl font-bold text-zinc-900">{selectedApp.creditScore}</div>
+                  {/* Applicant Tabs */}
+                  {selectedApp.applicants && selectedApp.applicants.length > 1 && (
+                    <div className="flex items-center gap-2 mb-8 overflow-x-auto pb-2 scrollbar-hide">
+                      {selectedApp.applicants.map((app, idx) => (
+                        <button
+                          key={idx}
+                          onClick={() => setActiveApplicantIndex(idx)}
+                          className={cn(
+                            "px-6 py-3 rounded-2xl text-xs font-bold transition-all whitespace-nowrap flex items-center gap-2",
+                            activeApplicantIndex === idx 
+                              ? "bg-zinc-900 text-white shadow-xl shadow-zinc-200" 
+                              : "bg-zinc-100 text-zinc-500 hover:bg-zinc-200"
+                          )}
+                        >
+                          <User className="w-3.5 h-3.5" />
+                          {idx === 0 ? 'Primary Applicant' : `Co-Applicant ${idx + 1}`}
+                        </button>
+                      ))}
                     </div>
-                    <div className="p-6 bg-zinc-50 rounded-3xl border border-zinc-100">
-                      <div className="text-xs font-bold text-zinc-400 uppercase tracking-wider mb-2">Annual Gross Income</div>
-                      <div className="text-2xl font-bold text-zinc-900">${selectedApp.annualIncome?.toLocaleString()}</div>
-                    </div>
-                  </div>
+                  )}
 
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mb-10">
-                    <div className="space-y-4">
-                      <h4 className="text-sm font-bold text-zinc-900 flex items-center gap-2">
-                        <Users className="w-4 h-4" />
-                        Borrower Information
-                      </h4>
-                      <div className="space-y-2 text-sm">
-                        <div className="flex justify-between">
-                          <span className="text-zinc-500">Phone</span>
-                          <span className="font-medium text-zinc-900">{selectedApp.phone || 'N/A'}</span>
+                  {(() => {
+                    const currentApp = selectedApp.applicants ? selectedApp.applicants[activeApplicantIndex] : selectedApp;
+                    
+                    return (
+                      <>
+                        <div className="grid grid-cols-2 gap-8 mb-8">
+                          <div className="p-6 bg-zinc-50 rounded-3xl border border-zinc-100">
+                            <div className="text-xs font-bold text-zinc-400 uppercase tracking-wider mb-2">Credit Score</div>
+                            <div className="text-2xl font-bold text-zinc-900">{currentApp.creditScore || 'N/A'}</div>
+                          </div>
+                          <div className="p-6 bg-zinc-50 rounded-3xl border border-zinc-100">
+                            <div className="text-xs font-bold text-zinc-400 uppercase tracking-wider mb-2">Annual Gross Income</div>
+                            <div className="text-2xl font-bold text-zinc-900">${currentApp.annualIncome?.toLocaleString() || '0'}</div>
+                          </div>
                         </div>
-                        <div className="flex justify-between">
-                          <span className="text-zinc-500">Address</span>
-                          <span className="font-medium text-zinc-900 text-right max-w-[150px]">{selectedApp.address || 'N/A'}</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span className="text-zinc-500">Loan Term</span>
-                          <span className="font-medium text-zinc-900">{selectedApp.loanTerm} Months</span>
-                        </div>
-                      </div>
-                    </div>
 
-                    <div className="space-y-4">
-                      <h4 className="text-sm font-bold text-zinc-900 flex items-center gap-2">
-                        <ShieldCheck className="w-4 h-4" />
-                        Employment & Assets
-                      </h4>
-                      <div className="space-y-2 text-sm">
-                        <div className="flex justify-between">
-                          <span className="text-zinc-500">Employer</span>
-                          <span className="font-medium text-zinc-900">{selectedApp.employerName || 'N/A'}</span>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mb-10">
+                          <div className="space-y-6">
+                            <h4 className="text-sm font-bold text-zinc-900 flex items-center gap-2">
+                              <User className="w-4 h-4" />
+                              Personal & Contact
+                            </h4>
+                            <div className="space-y-4">
+                              <div className="p-4 bg-zinc-50 rounded-2xl border border-zinc-100">
+                                <div className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-1">Full Name</div>
+                                <div className="text-sm font-bold text-zinc-900">{(currentApp as Applicant).name || (currentApp as LoanApplication).borrowerName}</div>
+                              </div>
+                              <div className="p-4 bg-zinc-50 rounded-2xl border border-zinc-100">
+                                <div className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-1">Email Address</div>
+                                <div className="text-sm font-bold text-zinc-900">{(currentApp as Applicant).email || (currentApp as LoanApplication).borrowerEmail}</div>
+                              </div>
+                              <div className="grid grid-cols-2 gap-4">
+                                <div className="p-4 bg-zinc-50 rounded-2xl border border-zinc-100">
+                                  <div className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-1">Phone</div>
+                                  <div className="text-sm font-bold text-zinc-900">{currentApp.phone || 'N/A'}</div>
+                                </div>
+                                <div className="p-4 bg-zinc-50 rounded-2xl border border-zinc-100">
+                                  <div className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-1">Date of Birth</div>
+                                  <div className="text-sm font-bold text-zinc-900">{currentApp.dob || 'N/A'}</div>
+                                </div>
+                              </div>
+                              <div className="p-4 bg-zinc-50 rounded-2xl border border-zinc-100">
+                                <div className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-1">Residential Address</div>
+                                <div className="text-sm font-bold text-zinc-900">{currentApp.address || 'N/A'}</div>
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="space-y-6">
+                            <h4 className="text-sm font-bold text-zinc-900 flex items-center gap-2">
+                              <Briefcase className="w-4 h-4" />
+                              Employment & Financials
+                            </h4>
+                            <div className="space-y-4">
+                              <div className="p-4 bg-zinc-50 rounded-2xl border border-zinc-100">
+                                <div className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-1">Employer & Job Title</div>
+                                <div className="text-sm font-bold text-zinc-900">
+                                  {currentApp.employerName || 'N/A'} • {currentApp.jobTitle || 'N/A'}
+                                </div>
+                              </div>
+                              <div className="grid grid-cols-2 gap-4">
+                                <div className="p-4 bg-zinc-50 rounded-2xl border border-zinc-100">
+                                  <div className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-1">Income Source</div>
+                                  <div className="text-sm font-bold text-zinc-900">{currentApp.incomeSource || 'N/A'}</div>
+                                </div>
+                                <div className="p-4 bg-zinc-50 rounded-2xl border border-zinc-100">
+                                  <div className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-1">Years at Job</div>
+                                  <div className="text-sm font-bold text-zinc-900">{currentApp.yearsAtJob || 0} Years</div>
+                                </div>
+                              </div>
+                              <div className="grid grid-cols-2 gap-4">
+                                <div className="p-4 bg-zinc-50 rounded-2xl border border-zinc-100">
+                                  <div className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-1">Monthly Expenses</div>
+                                  <div className="text-sm font-bold text-zinc-900">${currentApp.monthlyExpenses?.toLocaleString() || 0}</div>
+                                </div>
+                                <div className="p-4 bg-zinc-50 rounded-2xl border border-zinc-100">
+                                  <div className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-1">Monthly Debts</div>
+                                  <div className="text-sm font-bold text-zinc-900">${currentApp.otherMonthlyDebts?.toLocaleString() || 0}</div>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
                         </div>
-                        <div className="flex justify-between">
-                          <span className="text-zinc-500">Job Title</span>
-                          <span className="font-medium text-zinc-900">{selectedApp.jobTitle || 'N/A'}</span>
+
+                        {/* Assets & Liabilities Breakdown */}
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mb-10">
+                          <div className="space-y-4">
+                            <h4 className="text-sm font-bold text-zinc-900 flex items-center gap-2">
+                              <Wallet className="w-4 h-4" />
+                              Assets Breakdown
+                            </h4>
+                            <div className="space-y-2">
+                              {currentApp.assets && currentApp.assets.length > 0 ? (
+                                currentApp.assets.map((asset, idx) => (
+                                  <div key={idx} className="flex justify-between items-center p-3 bg-emerald-50/50 rounded-xl border border-emerald-100">
+                                    <span className="text-xs font-medium text-emerald-800">{asset.description}</span>
+                                    <span className="text-xs font-bold text-emerald-600">${asset.value.toLocaleString()}</span>
+                                  </div>
+                                ))
+                              ) : (
+                                <div className="text-xs text-zinc-400 italic p-3 bg-zinc-50 rounded-xl border border-dashed border-zinc-200">No assets listed</div>
+                              )}
+                              {currentApp.totalAssets !== undefined && (
+                                <div className="flex justify-between items-center p-3 bg-emerald-600 text-white rounded-xl shadow-lg shadow-emerald-100">
+                                  <span className="text-xs font-bold uppercase tracking-wider">Total Assets</span>
+                                  <span className="text-sm font-bold">${currentApp.totalAssets.toLocaleString()}</span>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="space-y-4">
+                            <h4 className="text-sm font-bold text-zinc-900 flex items-center gap-2">
+                              <CreditCard className="w-4 h-4" />
+                              Liabilities Breakdown
+                            </h4>
+                            <div className="space-y-2">
+                              {currentApp.liabilities && currentApp.liabilities.length > 0 ? (
+                                currentApp.liabilities.map((liability, idx) => (
+                                  <div key={idx} className="p-3 bg-red-50/50 rounded-xl border border-red-100">
+                                    <div className="flex justify-between items-center mb-1">
+                                      <span className="text-xs font-medium text-red-800">{liability.description || liability.type}</span>
+                                      <span className="text-xs font-bold text-red-600">${liability.balance.toLocaleString()}</span>
+                                    </div>
+                                    <div className="text-[10px] text-red-400 font-medium">Repayment: ${liability.monthlyRepayment}/mo</div>
+                                  </div>
+                                ))
+                              ) : (
+                                <div className="text-xs text-zinc-400 italic p-3 bg-zinc-50 rounded-xl border border-dashed border-zinc-200">No liabilities listed</div>
+                              )}
+                              {currentApp.totalLiabilities !== undefined && (
+                                <div className="flex justify-between items-center p-3 bg-red-600 text-white rounded-xl shadow-lg shadow-red-100">
+                                  <span className="text-xs font-bold uppercase tracking-wider">Total Liabilities</span>
+                                  <span className="text-sm font-bold">${currentApp.totalLiabilities.toLocaleString()}</span>
+                                </div>
+                              )}
+                            </div>
+                          </div>
                         </div>
-                        <div className="flex justify-between">
-                          <span className="text-zinc-500">Total Assets</span>
-                          <span className="font-medium text-emerald-600">${selectedApp.totalAssets?.toLocaleString() || '0'}</span>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
+                      </>
+                    );
+                  })()}
 
                   {selectedApp.assetDescription && (
                     <div className="mb-10">
@@ -1756,9 +2233,9 @@ const BorrowerDashboard = () => {
                     </h4>
                     <div className="space-y-6">
                       {[
-                        { label: 'Application Submitted', date: format(selectedApp.createdAt.toDate(), 'dd MMM yyyy'), completed: true },
+                        { label: 'Application Submitted', date: selectedApp.createdAt?.toDate ? format(selectedApp.createdAt.toDate(), 'dd MMM yyyy') : '...', completed: true },
                         { label: 'Under Review', date: selectedApp.status !== ApplicationStatus.PENDING ? 'In Progress' : 'Pending', completed: selectedApp.status !== ApplicationStatus.PENDING },
-                        { label: 'Final Decision', date: (selectedApp.status === ApplicationStatus.APPROVED || selectedApp.status === ApplicationStatus.REJECTED) ? format(selectedApp.updatedAt.toDate(), 'dd MMM yyyy') : 'Pending', completed: selectedApp.status === ApplicationStatus.APPROVED || selectedApp.status === ApplicationStatus.REJECTED }
+                        { label: 'Final Decision', date: (selectedApp.status === ApplicationStatus.APPROVED || selectedApp.status === ApplicationStatus.REJECTED) && selectedApp.updatedAt?.toDate ? format(selectedApp.updatedAt.toDate(), 'dd MMM yyyy') : 'Pending', completed: selectedApp.status === ApplicationStatus.APPROVED || selectedApp.status === ApplicationStatus.REJECTED }
                       ].map((step, idx) => (
                         <div key={idx} className="flex items-center gap-4">
                           <div className={cn(
@@ -1798,12 +2275,28 @@ const BorrowerDashboard = () => {
                     </div>
                   </div>
 
-                  <button 
-                    onClick={() => setSelectedApp(null)}
-                    className="w-full py-4 bg-zinc-100 text-zinc-900 rounded-2xl font-bold hover:bg-zinc-200 transition-all"
-                  >
-                    Close
-                  </button>
+                  <div className="flex gap-4">
+                    <button 
+                      onClick={() => setSelectedApp(null)}
+                      className="flex-1 py-4 bg-zinc-100 text-zinc-900 rounded-2xl font-bold hover:bg-zinc-200 transition-all"
+                    >
+                      Close
+                    </button>
+                    {(selectedApp.status === ApplicationStatus.PENDING || 
+                      selectedApp.status === ApplicationStatus.REVIEWING || 
+                      selectedApp.status === ApplicationStatus.PROPOSED) && (
+                      <button 
+                        onClick={() => {
+                          handleEdit(selectedApp);
+                          setSelectedApp(null);
+                        }}
+                        className="flex-1 py-4 bg-zinc-900 text-white rounded-2xl font-bold hover:bg-zinc-800 transition-all flex items-center justify-center gap-2"
+                      >
+                        <Edit3 className="w-4 h-4" />
+                        Edit Application
+                      </button>
+                    )}
+                  </div>
                 </div>
               </motion.div>
             </div>
@@ -1816,6 +2309,25 @@ const BorrowerDashboard = () => {
           </p>
         </div>
       </main>
+
+      <AnimatePresence>
+        {toast && (
+          <motion.div
+            initial={{ opacity: 0, y: 50, x: '-50%' }}
+            animate={{ opacity: 1, y: 0, x: '-50%' }}
+            exit={{ opacity: 0, y: 50, x: '-50%' }}
+            className={cn(
+              "fixed bottom-8 left-1/2 z-[100] px-6 py-3 rounded-2xl shadow-2xl flex items-center gap-3 border backdrop-blur-md",
+              toast.type === 'success' 
+                ? "bg-emerald-500/90 text-white border-emerald-400" 
+                : "bg-red-500/90 text-white border-red-400"
+            )}
+          >
+            {toast.type === 'success' ? <CheckCircle2 className="w-5 h-5" /> : <AlertCircle className="w-5 h-5" />}
+            <span className="text-sm font-bold">{toast.message}</span>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 };
@@ -1841,7 +2353,10 @@ const LenderAnalytics = ({ applications }: { applications: LoanApplication[] }) 
   // Volume Data for Line Chart (Last 7 days)
   const last7Days = Array.from({ length: 7 }, (_, i) => {
     const date = subDays(new Date(), i);
-    const dayApps = applications.filter(a => isSameDay(a.createdAt.toDate(), date));
+    const dayApps = applications.filter(a => {
+      const appDate = a.createdAt?.toDate?.() || new Date();
+      return isSameDay(appDate, date);
+    });
     return {
       date: format(date, 'MMM d'),
       amount: dayApps.reduce((sum, a) => sum + a.amount, 0),
@@ -1959,11 +2474,19 @@ const LenderDashboard = () => {
   const [activeApplicantIndex, setActiveApplicantIndex] = useState(0);
   const [lenderNotes, setLenderNotes] = useState('');
   const [internalNotes, setInternalNotes] = useState('');
+  const [proposedAmount, setProposedAmount] = useState('');
+  const [proposedTerm, setProposedTerm] = useState('');
+  const [proposedNotes, setProposedNotes] = useState('');
+  const [showProposeForm, setShowProposeForm] = useState(false);
 
   useEffect(() => {
     if (selectedApp) {
       setLenderNotes(selectedApp.lenderNotes || '');
       setInternalNotes(selectedApp.internalNotes || '');
+      setProposedAmount(selectedApp.amount.toString());
+      setProposedTerm(selectedApp.loanTerm.toString());
+      setProposedNotes('');
+      setShowProposeForm(false);
       setActiveApplicantIndex(0);
     }
   }, [selectedApp]);
@@ -1972,7 +2495,11 @@ const LenderDashboard = () => {
     const q = collection(db, 'applications');
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const apps = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as LoanApplication));
-      setApplications(apps.sort((a, b) => b.createdAt.toMillis() - a.createdAt.toMillis()));
+      setApplications(apps.sort((a, b) => {
+        const t1 = a.createdAt?.toMillis?.() || Date.now();
+        const t2 = b.createdAt?.toMillis?.() || Date.now();
+        return t2 - t1;
+      }));
     }, (error) => {
       handleFirestoreError(error, OperationType.LIST, 'applications');
     });
@@ -2014,6 +2541,40 @@ const LenderDashboard = () => {
         internalNotes,
         updatedAt: serverTimestamp(),
       });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `applications/${selectedApp.id}`);
+    }
+  };
+
+  const handleProposeModifications = async () => {
+    if (!selectedApp) return;
+    try {
+      await updateDoc(doc(db, 'applications', selectedApp.id), {
+        status: ApplicationStatus.PROPOSED,
+        proposedModifications: {
+          amount: proposedAmount ? Number(proposedAmount) : selectedApp.amount,
+          loanTerm: proposedTerm ? Number(proposedTerm) : selectedApp.loanTerm,
+          notes: proposedNotes,
+          proposedAt: serverTimestamp(),
+        },
+        lenderNotes: proposedNotes,
+        updatedAt: serverTimestamp(),
+      });
+
+      sendEmail(
+        selectedApp.borrowerEmail,
+        `Loan Application: Modification Proposed`,
+        `<h3>Modification Proposed</h3>
+         <p>A lender has proposed modifications to your loan application for <strong>$${selectedApp.amount.toLocaleString()}</strong>.</p>
+         <p><strong>Proposed Amount:</strong> $${(Number(proposedAmount) || selectedApp.amount).toLocaleString()}</p>
+         <p><strong>Proposed Term:</strong> ${proposedTerm || selectedApp.loanTerm} Months</p>
+         ${proposedNotes ? `<p><strong>Lender Notes:</strong> ${proposedNotes}</p>` : ''}
+         <p>Please log in to your dashboard to accept or reject these changes.</p>
+         <p><a href="${window.location.origin}">Open LendFlow</a></p>`
+      );
+
+      setSelectedApp(null);
+      setShowProposeForm(false);
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, `applications/${selectedApp.id}`);
     }
@@ -2091,7 +2652,7 @@ const LenderDashboard = () => {
                   <p className="text-zinc-500">Analyze risk and manage loan originations.</p>
                 </div>
                 <div className="flex items-center gap-4 bg-white p-1.5 rounded-2xl border border-zinc-200 shadow-sm">
-                  {(['all', 'pending', 'reviewing', 'approved', 'rejected'] as const).map((s) => (
+                  {(['all', 'pending', 'reviewing', 'proposed', 'approved', 'rejected'] as const).map((s) => (
                     <button
                       key={s}
                       onClick={() => setFilter(s as ApplicationStatus | 'all')}
@@ -2184,7 +2745,7 @@ const LenderDashboard = () => {
                         </div>
                       </td>
                       <td className="px-8 py-6 text-sm text-zinc-500">
-                        {format(app.createdAt.toDate(), 'MMM d')}
+                        {app.createdAt?.toDate ? format(app.createdAt.toDate(), 'MMM d') : '...'}
                       </td>
                       <td className="px-8 py-6 text-right">
                         <button 
@@ -2232,7 +2793,7 @@ const LenderDashboard = () => {
                 exit={{ opacity: 0, scale: 0.95, y: 20 }}
                 className="relative bg-white w-full max-w-4xl max-h-[90vh] rounded-[2.5rem] shadow-2xl overflow-hidden flex flex-col"
               >
-                <div className="p-10 overflow-y-auto scrollbar-hide">
+                <div className="p-10 overflow-y-auto">
                   <div className="flex justify-between items-start mb-8">
                     <div>
                       <h3 className="text-3xl font-bold text-zinc-900 mb-1">Review Application</h3>
@@ -2462,87 +3023,86 @@ const LenderDashboard = () => {
                             </div>
                           </div>
                         </div>
+
+                        {/* Detailed Financials Section */}
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mb-10">
+                          <div className="space-y-6">
+                            <div className="flex items-center gap-3 mb-2">
+                              <div className="w-8 h-8 rounded-lg bg-zinc-100 flex items-center justify-center">
+                                <Wallet className="w-4 h-4 text-zinc-900" />
+                              </div>
+                              <h4 className="text-sm font-bold text-zinc-900 uppercase tracking-wider">Assets Breakdown</h4>
+                            </div>
+                            <div className="space-y-3">
+                              {currentApp.assets && currentApp.assets.length > 0 ? (
+                                currentApp.assets.map((asset, idx) => (
+                                  <div key={idx} className="p-4 bg-zinc-50 rounded-2xl border border-zinc-100 flex justify-between items-center">
+                                    <div>
+                                      <div className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">{asset.type}</div>
+                                      <div className="text-sm font-bold text-zinc-900">{asset.description || 'No description'}</div>
+                                    </div>
+                                    <div className="text-sm font-bold text-zinc-900">${asset.value.toLocaleString()}</div>
+                                  </div>
+                                ))
+                              ) : (
+                                <div className="text-sm text-zinc-500 italic p-4 bg-zinc-50 rounded-2xl border border-dashed border-zinc-200 text-center">
+                                  No detailed assets provided.
+                                </div>
+                              )}
+                              {currentApp.totalAssets !== undefined && (
+                                <div className="flex justify-between items-center p-4 bg-zinc-900 rounded-2xl text-white">
+                                  <div className="text-xs font-bold uppercase tracking-widest">Total Assets</div>
+                                  <div className="text-lg font-bold">${currentApp.totalAssets.toLocaleString()}</div>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="space-y-6">
+                            <div className="flex items-center gap-3 mb-2">
+                              <div className="w-8 h-8 rounded-lg bg-zinc-100 flex items-center justify-center">
+                                <Activity className="w-4 h-4 text-zinc-900" />
+                              </div>
+                              <h4 className="text-sm font-bold text-zinc-900 uppercase tracking-wider">Liabilities Breakdown</h4>
+                            </div>
+                            <div className="space-y-3">
+                              {currentApp.liabilities && currentApp.liabilities.length > 0 ? (
+                                currentApp.liabilities.map((liability, idx) => (
+                                  <div key={idx} className="p-4 bg-zinc-50 rounded-2xl border border-zinc-100 flex justify-between items-center">
+                                    <div>
+                                      <div className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">{liability.type}</div>
+                                      <div className="text-sm font-bold text-zinc-900">{liability.description || 'No description'}</div>
+                                      <div className="text-[10px] text-zinc-500">Repayment: ${liability.monthlyRepayment}/mo</div>
+                                    </div>
+                                    <div className="text-sm font-bold text-zinc-900">${liability.balance.toLocaleString()}</div>
+                                  </div>
+                                ))
+                              ) : (
+                                <div className="text-sm text-zinc-500 italic p-4 bg-zinc-50 rounded-2xl border border-dashed border-zinc-200 text-center">
+                                  No detailed liabilities provided.
+                                </div>
+                              )}
+                              {currentApp.totalLiabilities !== undefined && (
+                                <div className="flex justify-between items-center p-4 bg-zinc-900 rounded-2xl text-white">
+                                  <div className="text-xs font-bold uppercase tracking-widest">Total Liabilities</div>
+                                  <div className="text-lg font-bold">${currentApp.totalLiabilities.toLocaleString()}</div>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+
+                        {selectedApp.assetDescription && (
+                          <div className="mb-10">
+                            <h4 className="text-sm font-bold text-zinc-900 mb-2">Asset Description</h4>
+                            <p className="text-sm text-zinc-600 bg-zinc-50 p-4 rounded-2xl border border-zinc-100">
+                              {selectedApp.assetDescription}
+                            </p>
+                          </div>
+                        )}
                       </>
                     );
                   })()}
-
-
-                  {/* Detailed Financials Section */}
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mb-10">
-                    <div className="space-y-6">
-                      <div className="flex items-center gap-3 mb-2">
-                        <div className="w-8 h-8 rounded-lg bg-zinc-100 flex items-center justify-center">
-                          <Wallet className="w-4 h-4 text-zinc-900" />
-                        </div>
-                        <h4 className="text-sm font-bold text-zinc-900 uppercase tracking-wider">Assets Breakdown</h4>
-                      </div>
-                      <div className="space-y-3">
-                        {selectedApp.assets && selectedApp.assets.length > 0 ? (
-                          selectedApp.assets.map((asset, idx) => (
-                            <div key={idx} className="p-4 bg-zinc-50 rounded-2xl border border-zinc-100 flex justify-between items-center">
-                              <div>
-                                <div className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">{asset.type}</div>
-                                <div className="text-sm font-bold text-zinc-900">{asset.description || 'No description'}</div>
-                              </div>
-                              <div className="text-sm font-bold text-zinc-900">${asset.value.toLocaleString()}</div>
-                            </div>
-                          ))
-                        ) : (
-                          <div className="text-sm text-zinc-500 italic p-4 bg-zinc-50 rounded-2xl border border-dashed border-zinc-200 text-center">
-                            No detailed assets provided.
-                          </div>
-                        )}
-                        {selectedApp.totalAssets !== undefined && (
-                          <div className="flex justify-between items-center p-4 bg-zinc-900 rounded-2xl text-white">
-                            <div className="text-xs font-bold uppercase tracking-widest">Total Assets</div>
-                            <div className="text-lg font-bold">${selectedApp.totalAssets.toLocaleString()}</div>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="space-y-6">
-                      <div className="flex items-center gap-3 mb-2">
-                        <div className="w-8 h-8 rounded-lg bg-zinc-100 flex items-center justify-center">
-                          <Activity className="w-4 h-4 text-zinc-900" />
-                        </div>
-                        <h4 className="text-sm font-bold text-zinc-900 uppercase tracking-wider">Liabilities Breakdown</h4>
-                      </div>
-                      <div className="space-y-3">
-                        {selectedApp.liabilities && selectedApp.liabilities.length > 0 ? (
-                          selectedApp.liabilities.map((liability, idx) => (
-                            <div key={idx} className="p-4 bg-zinc-50 rounded-2xl border border-zinc-100 flex justify-between items-center">
-                              <div>
-                                <div className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">{liability.type}</div>
-                                <div className="text-sm font-bold text-zinc-900">{liability.description || 'No description'}</div>
-                                <div className="text-[10px] text-zinc-500">Repayment: ${liability.monthlyRepayment}/mo</div>
-                              </div>
-                              <div className="text-sm font-bold text-zinc-900">${liability.balance.toLocaleString()}</div>
-                            </div>
-                          ))
-                        ) : (
-                          <div className="text-sm text-zinc-500 italic p-4 bg-zinc-50 rounded-2xl border border-dashed border-zinc-200 text-center">
-                            No detailed liabilities provided.
-                          </div>
-                        )}
-                        {selectedApp.totalLiabilities !== undefined && (
-                          <div className="flex justify-between items-center p-4 bg-zinc-900 rounded-2xl text-white">
-                            <div className="text-xs font-bold uppercase tracking-widest">Total Liabilities</div>
-                            <div className="text-lg font-bold">${selectedApp.totalLiabilities.toLocaleString()}</div>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-
-                  {selectedApp.assetDescription && (
-                    <div className="mb-10">
-                      <h4 className="text-sm font-bold text-zinc-900 mb-2">Asset Description</h4>
-                      <p className="text-sm text-zinc-600 bg-zinc-50 p-4 rounded-2xl border border-zinc-100">
-                        {selectedApp.assetDescription}
-                      </p>
-                    </div>
-                  )}
 
                   {/* Documents Section */}
                   <div className="mb-8">
@@ -2594,6 +3154,68 @@ const LenderDashboard = () => {
                         Save All Notes
                       </button>
                     </div>
+                  </div>
+
+                  {/* Propose Modification Section */}
+                  <div className="mb-10 border-t border-zinc-100 pt-10">
+                    <div className="flex justify-between items-center mb-6">
+                      <h4 className="text-sm font-bold text-zinc-900 uppercase tracking-wider flex items-center gap-2">
+                        <Edit2 className="w-4 h-4" />
+                        Propose Modification
+                      </h4>
+                      <button 
+                        onClick={() => setShowProposeForm(!showProposeForm)}
+                        className="text-xs font-bold text-zinc-500 hover:text-zinc-900 transition-all"
+                      >
+                        {showProposeForm ? 'Cancel' : 'Open Proposal Form'}
+                      </button>
+                    </div>
+
+                    {showProposeForm && (
+                      <motion.div 
+                        initial={{ opacity: 0, height: 0 }}
+                        animate={{ opacity: 1, height: 'auto' }}
+                        className="space-y-6 bg-zinc-50 p-8 rounded-[2rem] border border-zinc-200"
+                      >
+                        <div className="grid grid-cols-2 gap-6">
+                          <div className="space-y-2">
+                            <label className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest ml-1">Proposed Amount ($)</label>
+                            <input 
+                              type="number"
+                              value={proposedAmount}
+                              onChange={(e) => setProposedAmount(e.target.value)}
+                              className="w-full px-6 py-4 bg-white border border-zinc-200 rounded-2xl focus:outline-none focus:ring-2 focus:ring-zinc-900 transition-all text-sm font-bold"
+                            />
+                          </div>
+                          <div className="space-y-2">
+                            <label className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest ml-1">Proposed Term (Months)</label>
+                            <input 
+                              type="number"
+                              value={proposedTerm}
+                              onChange={(e) => setProposedTerm(e.target.value)}
+                              className="w-full px-6 py-4 bg-white border border-zinc-200 rounded-2xl focus:outline-none focus:ring-2 focus:ring-zinc-900 transition-all text-sm font-bold"
+                            />
+                          </div>
+                        </div>
+                        <div className="space-y-2">
+                          <label className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest ml-1">Proposal Notes / Justification</label>
+                          <textarea 
+                            value={proposedNotes}
+                            onChange={(e) => setProposedNotes(e.target.value)}
+                            placeholder="Explain why you are proposing these changes..."
+                            className="w-full p-6 bg-white border border-zinc-200 rounded-2xl focus:outline-none focus:ring-2 focus:ring-zinc-900 transition-all text-sm min-h-[100px]"
+                          />
+                        </div>
+                        <div className="flex justify-end">
+                          <button 
+                            onClick={handleProposeModifications}
+                            className="px-8 py-3 bg-zinc-900 text-white rounded-xl text-sm font-bold hover:bg-zinc-800 transition-all shadow-lg shadow-zinc-200"
+                          >
+                            Send Proposal to Borrower
+                          </button>
+                        </div>
+                      </motion.div>
+                    )}
                   </div>
 
                   <div className="flex gap-4">
@@ -2652,6 +3274,8 @@ const AdminDashboard = () => {
   const [appSearch, setAppSearch] = useState('');
   const [appMinAmount, setAppMinAmount] = useState('');
   const [appMaxAmount, setAppMaxAmount] = useState('');
+  const [appSortBy, setAppSortBy] = useState<'date' | 'amount' | 'name'>('date');
+  const [appSortOrder, setAppSortOrder] = useState<'asc' | 'desc'>('desc');
   const [userSearch, setUserSearch] = useState('');
 
   useEffect(() => {
@@ -2659,7 +3283,11 @@ const AdminDashboard = () => {
     const qApps = collection(db, 'applications');
     const unsubscribeApps = onSnapshot(qApps, (snapshot) => {
       const apps = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as LoanApplication));
-      setApplications(apps.sort((a, b) => b.createdAt.toMillis() - a.createdAt.toMillis()));
+      setApplications(apps.sort((a, b) => {
+        const t1 = a.createdAt?.toMillis?.() || Date.now();
+        const t2 = b.createdAt?.toMillis?.() || Date.now();
+        return t2 - t1;
+      }));
     }, (error) => {
       handleFirestoreError(error, OperationType.LIST, 'applications');
     });
@@ -2668,7 +3296,11 @@ const AdminDashboard = () => {
     const qUsers = collection(db, 'users');
     const unsubscribeUsers = onSnapshot(qUsers, (snapshot) => {
       const u = snapshot.docs.map(doc => doc.data() as UserProfile);
-      setUsers(u.sort((a, b) => b.createdAt.toMillis() - a.createdAt.toMillis()));
+      setUsers(u.sort((a, b) => {
+        const t1 = a.createdAt?.toMillis?.() || Date.now();
+        const t2 = b.createdAt?.toMillis?.() || Date.now();
+        return t2 - t1;
+      }));
     }, (error) => {
       handleFirestoreError(error, OperationType.LIST, 'users');
     });
@@ -2747,6 +3379,59 @@ const AdminDashboard = () => {
     }
   };
 
+  const handleExportCSV = () => {
+    const headers = [
+      'Application ID',
+      'Borrower Name',
+      'Borrower Email',
+      'Amount',
+      'Purpose',
+      'Loan Term (Months)',
+      'Status',
+      'Created At',
+      'Updated At',
+      'Credit Score',
+      'Annual Income',
+      'NSR',
+      'DSR',
+      'Lender Email',
+      'Lender ID'
+    ];
+
+    const csvRows = sortedApps.map(app => [
+      app.id,
+      `"${app.borrowerName}"`,
+      app.borrowerEmail,
+      app.amount,
+      `"${app.purpose}"`,
+      app.loanTerm || 'N/A',
+      app.status,
+      app.createdAt?.toDate ? format(app.createdAt.toDate(), 'yyyy-MM-dd HH:mm:ss') : 'N/A',
+      app.updatedAt?.toDate ? format(app.updatedAt.toDate(), 'yyyy-MM-dd HH:mm:ss') : 'N/A',
+      app.creditScore || 'N/A',
+      app.annualIncome || 'N/A',
+      app.nsr || 'N/A',
+      app.dsr || 'N/A',
+      app.lenderEmail || 'N/A',
+      app.lenderId || 'N/A'
+    ]);
+
+    const csvContent = [
+      headers.join(','),
+      ...csvRows.map(row => row.join(','))
+    ].join('\n');
+
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.setAttribute('href', url);
+    link.setAttribute('download', `lendflow_applications_${format(new Date(), 'yyyyMMdd_HHmm')}.csv`);
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   const filteredApps = applications.filter(app => {
     const matchesStatus = appFilter === 'all' || app.status === appFilter;
     const matchesSearch = (app.borrowerName || '').toLowerCase().includes(appSearch.toLowerCase()) || 
@@ -2754,6 +3439,20 @@ const AdminDashboard = () => {
     const matchesMin = appMinAmount === '' || app.amount >= Number(appMinAmount);
     const matchesMax = appMaxAmount === '' || app.amount <= Number(appMaxAmount);
     return matchesStatus && matchesSearch && matchesMin && matchesMax;
+  });
+
+  const sortedApps = [...filteredApps].sort((a, b) => {
+    let comparison = 0;
+    if (appSortBy === 'date') {
+      const t1 = a.createdAt?.toMillis?.() || 0;
+      const t2 = b.createdAt?.toMillis?.() || 0;
+      comparison = t2 - t1;
+    } else if (appSortBy === 'amount') {
+      comparison = b.amount - a.amount;
+    } else if (appSortBy === 'name') {
+      comparison = (a.borrowerName || '').localeCompare(b.borrowerName || '');
+    }
+    return appSortOrder === 'desc' ? comparison : -comparison;
   });
 
   const filteredUsers = users.filter(u => {
@@ -2835,26 +3534,35 @@ const AdminDashboard = () => {
               <p className="text-zinc-500">Global oversight of the LendFlow platform.</p>
             </div>
             {view === 'applications' && (
-              <div className="flex items-center gap-4 bg-white p-1.5 rounded-2xl border border-zinc-200 shadow-sm">
-                {(['all', 'pending', 'reviewing', 'approved', 'rejected'] as const).map((s) => (
-                  <button
-                    key={s}
-                    onClick={() => setAppFilter(s as ApplicationStatus | 'all')}
-                    className={cn(
-                      "px-4 py-2 rounded-xl text-sm font-bold transition-all",
-                      appFilter === s ? "bg-zinc-900 text-white" : "text-zinc-500 hover:bg-zinc-50"
-                    )}
-                  >
-                    {s.charAt(0).toUpperCase() + s.slice(1)}
-                  </button>
-                ))}
+              <div className="flex items-center gap-4">
+                <button
+                  onClick={handleExportCSV}
+                  className="flex items-center gap-2 px-6 py-3 bg-white border border-zinc-200 text-zinc-900 rounded-2xl font-bold hover:bg-zinc-50 transition-all shadow-sm"
+                >
+                  <Download className="w-4 h-4" />
+                  Export CSV
+                </button>
+                <div className="flex items-center gap-4 bg-white p-1.5 rounded-2xl border border-zinc-200 shadow-sm">
+                  {(['all', 'pending', 'reviewing', 'proposed', 'approved', 'rejected'] as const).map((s) => (
+                    <button
+                      key={s}
+                      onClick={() => setAppFilter(s as ApplicationStatus | 'all')}
+                      className={cn(
+                        "px-4 py-2 rounded-xl text-sm font-bold transition-all",
+                        appFilter === s ? "bg-zinc-900 text-white" : "text-zinc-500 hover:bg-zinc-50"
+                      )}
+                    >
+                      {s.charAt(0).toUpperCase() + s.slice(1)}
+                    </button>
+                  ))}
+                </div>
               </div>
             )}
           </div>
 
           {(view === 'applications' || view === 'users') && (
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div className="relative">
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+              <div className="relative col-span-1">
                 <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-zinc-400" />
                 <input 
                   type="text"
@@ -2865,28 +3573,49 @@ const AdminDashboard = () => {
                 />
               </div>
               {view === 'applications' && (
-                <div className="flex gap-4 col-span-2">
-                  <div className="relative flex-1">
-                    <DollarSign className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
-                    <input 
-                      type="number"
-                      placeholder="Min amount"
-                      value={appMinAmount}
-                      onChange={(e) => setAppMinAmount(e.target.value)}
-                      className="w-full pl-10 pr-4 py-3 bg-white border border-zinc-200 rounded-2xl focus:outline-none focus:ring-2 focus:ring-zinc-900 transition-all text-sm"
-                    />
+                <>
+                  <div className="flex gap-4 col-span-2">
+                    <div className="relative flex-1">
+                      <DollarSign className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
+                      <input 
+                        type="number"
+                        placeholder="Min amount"
+                        value={appMinAmount}
+                        onChange={(e) => setAppMinAmount(e.target.value)}
+                        className="w-full pl-10 pr-4 py-3 bg-white border border-zinc-200 rounded-2xl focus:outline-none focus:ring-2 focus:ring-zinc-900 transition-all text-sm"
+                      />
+                    </div>
+                    <div className="relative flex-1">
+                      <DollarSign className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
+                      <input 
+                        type="number"
+                        placeholder="Max amount"
+                        value={appMaxAmount}
+                        onChange={(e) => setAppMaxAmount(e.target.value)}
+                        className="w-full pl-10 pr-4 py-3 bg-white border border-zinc-200 rounded-2xl focus:outline-none focus:ring-2 focus:ring-zinc-900 transition-all text-sm"
+                      />
+                    </div>
                   </div>
-                  <div className="relative flex-1">
-                    <DollarSign className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
-                    <input 
-                      type="number"
-                      placeholder="Max amount"
-                      value={appMaxAmount}
-                      onChange={(e) => setAppMaxAmount(e.target.value)}
-                      className="w-full pl-10 pr-4 py-3 bg-white border border-zinc-200 rounded-2xl focus:outline-none focus:ring-2 focus:ring-zinc-900 transition-all text-sm"
-                    />
+                  <div className="bg-white border border-zinc-200 rounded-2xl px-4 py-3 flex items-center gap-3">
+                    <Filter className="w-4 h-4 text-zinc-400" />
+                    <select 
+                      value={appSortBy}
+                      onChange={(e) => setAppSortBy(e.target.value as any)}
+                      className="bg-transparent text-sm font-bold text-zinc-900 focus:outline-none cursor-pointer"
+                    >
+                      <option value="date">Sort by Date</option>
+                      <option value="amount">Sort by Amount</option>
+                      <option value="name">Sort by Name</option>
+                    </select>
+                    <button 
+                      onClick={() => setAppSortOrder(prev => prev === 'asc' ? 'desc' : 'asc')}
+                      className="p-1 hover:bg-zinc-100 rounded-md transition-all text-zinc-600"
+                      title={appSortOrder === 'desc' ? 'Descending' : 'Ascending'}
+                    >
+                      {appSortOrder === 'desc' ? <ArrowDownWideNarrow className="w-4 h-4" /> : <ArrowUpWideNarrow className="w-4 h-4" />}
+                    </button>
                   </div>
-                </div>
+                </>
               )}
             </div>
           )}
@@ -2938,7 +3667,9 @@ const AdminDashboard = () => {
                       </div>
                       <div className="text-right">
                         <div className="font-bold text-zinc-900">${app.amount.toLocaleString()}</div>
-                        <div className="text-xs text-zinc-400">{format(app.createdAt.toDate(), 'MMM d, HH:mm')}</div>
+                        <div className="text-xs text-zinc-400">
+                          {app.createdAt?.toDate ? format(app.createdAt.toDate(), 'MMM d, HH:mm') : '...'}
+                        </div>
                       </div>
                     </div>
                   ))}
@@ -2966,7 +3697,9 @@ const AdminDashboard = () => {
                         <div className="text-xs font-bold text-zinc-400 uppercase tracking-wider px-2 py-1 bg-zinc-50 rounded-md inline-block">
                           {u.role}
                         </div>
-                        <div className="text-xs text-zinc-400 mt-1">{format(u.createdAt.toDate(), 'dd MMM yyyy')}</div>
+                        <div className="text-xs text-zinc-400 mt-1">
+                          {u.createdAt?.toDate ? format(u.createdAt.toDate(), 'dd MMM yyyy') : '...'}
+                        </div>
                       </div>
                     </div>
                   ))}
@@ -2990,7 +3723,7 @@ const AdminDashboard = () => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-zinc-50">
-                {filteredApps.map((app) => (
+                {sortedApps.map((app) => (
                   <tr key={app.id} onClick={() => setSelectedAdminApp(app)} className="hover:bg-zinc-50/50 transition-colors cursor-pointer">
                     <td className="px-8 py-6">
                       <div className="font-bold text-zinc-900">{app.borrowerName}</div>
@@ -3004,6 +3737,7 @@ const AdminDashboard = () => {
                         "text-xs font-bold px-3 py-1 rounded-full inline-block",
                         app.status === ApplicationStatus.APPROVED ? "bg-emerald-100 text-emerald-700" :
                         app.status === ApplicationStatus.REJECTED ? "bg-red-100 text-red-700" :
+                        app.status === ApplicationStatus.PROPOSED ? "bg-amber-100 text-amber-700" :
                         "bg-zinc-100 text-zinc-600"
                       )}>
                         {app.status}
@@ -3016,7 +3750,7 @@ const AdminDashboard = () => {
                       </div>
                     </td>
                     <td className="px-8 py-6 text-sm text-zinc-500">
-                      {format(app.createdAt.toDate(), 'dd MMM yyyy')}
+                      {app.createdAt?.toDate ? format(app.createdAt.toDate(), 'dd MMM yyyy') : '...'}
                     </td>
                     <td className="px-8 py-6 text-right">
                       <div className="flex justify-end gap-2">
@@ -3102,7 +3836,7 @@ const AdminDashboard = () => {
                       </select>
                     </td>
                     <td className="px-8 py-6 text-sm text-zinc-500">
-                      {format(u.createdAt.toDate(), 'dd MMM yyyy')}
+                      {u.createdAt?.toDate ? format(u.createdAt.toDate(), 'dd MMM yyyy') : '...'}
                     </td>
                     <td className="px-8 py-6 text-right">
                       <button 
@@ -3364,6 +4098,71 @@ const AdminDashboard = () => {
                             </div>
                           </div>
                         </div>
+
+                        {/* Assets & Liabilities Breakdown */}
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mb-10">
+                          <div className="space-y-4">
+                            <h4 className="text-sm font-bold text-zinc-900 flex items-center gap-2">
+                              <Wallet className="w-4 h-4" />
+                              Assets Breakdown
+                            </h4>
+                            <div className="space-y-2">
+                              {currentApp.assets && currentApp.assets.length > 0 ? (
+                                currentApp.assets.map((asset, idx) => (
+                                  <div key={idx} className="flex justify-between items-center p-3 bg-emerald-50/50 rounded-xl border border-emerald-100">
+                                    <span className="text-xs font-medium text-emerald-800">{asset.description}</span>
+                                    <span className="text-xs font-bold text-emerald-600">${asset.value.toLocaleString()}</span>
+                                  </div>
+                                ))
+                              ) : (
+                                <div className="text-xs text-zinc-400 italic p-3 bg-zinc-50 rounded-xl border border-dashed border-zinc-200">No assets listed</div>
+                              )}
+                              {currentApp.totalAssets !== undefined && (
+                                <div className="flex justify-between items-center p-3 bg-emerald-600 text-white rounded-xl shadow-lg shadow-emerald-100">
+                                  <span className="text-xs font-bold uppercase tracking-wider">Total Assets</span>
+                                  <span className="text-sm font-bold">${currentApp.totalAssets.toLocaleString()}</span>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="space-y-4">
+                            <h4 className="text-sm font-bold text-zinc-900 flex items-center gap-2">
+                              <CreditCard className="w-4 h-4" />
+                              Liabilities Breakdown
+                            </h4>
+                            <div className="space-y-2">
+                              {currentApp.liabilities && currentApp.liabilities.length > 0 ? (
+                                currentApp.liabilities.map((liability, idx) => (
+                                  <div key={idx} className="p-3 bg-red-50/50 rounded-xl border border-red-100">
+                                    <div className="flex justify-between items-center mb-1">
+                                      <span className="text-xs font-medium text-red-800">{liability.description || liability.type}</span>
+                                      <span className="text-xs font-bold text-red-600">${liability.balance.toLocaleString()}</span>
+                                    </div>
+                                    <div className="text-[10px] text-red-400 font-medium">Repayment: ${liability.monthlyRepayment}/mo</div>
+                                  </div>
+                                ))
+                              ) : (
+                                <div className="text-xs text-zinc-400 italic p-3 bg-zinc-50 rounded-xl border border-dashed border-zinc-200">No liabilities listed</div>
+                              )}
+                              {currentApp.totalLiabilities !== undefined && (
+                                <div className="flex justify-between items-center p-3 bg-red-600 text-white rounded-xl shadow-lg shadow-red-100">
+                                  <span className="text-xs font-bold uppercase tracking-wider">Total Liabilities</span>
+                                  <span className="text-sm font-bold">${currentApp.totalLiabilities.toLocaleString()}</span>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+
+                        {selectedAdminApp.assetDescription && (
+                          <div className="mb-10">
+                            <h4 className="text-sm font-bold text-zinc-900 mb-2">Asset Description</h4>
+                            <p className="text-sm text-zinc-600 bg-zinc-50 p-4 rounded-2xl border border-zinc-100">
+                              {selectedAdminApp.assetDescription}
+                            </p>
+                          </div>
+                        )}
                       </>
                     );
                   })()}

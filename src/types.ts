@@ -17,8 +17,16 @@ export interface UserProfile {
 export enum ApplicationStatus {
   PENDING = 'pending',
   REVIEWING = 'reviewing',
+  PROPOSED = 'proposed',
   APPROVED = 'approved',
   REJECTED = 'rejected',
+}
+
+export interface ProposedModifications {
+  amount?: number;
+  loanTerm?: number;
+  notes?: string;
+  proposedAt: Timestamp;
 }
 
 export interface LoanDocument {
@@ -87,6 +95,7 @@ export interface LoanApplication {
   lenderEmail?: string;
   nsr?: number;
   dsr?: number;
+  proposedModifications?: ProposedModifications;
   // Legacy fields (optional now)
   creditScore?: number;
   annualIncome?: number;

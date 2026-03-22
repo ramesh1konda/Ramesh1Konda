@@ -11,13 +11,14 @@ service cloud.firestore {
     //   - uid: string (required) - Firebase Auth UID
     //   - email: string (required, email format) - User's email
     //   - displayName: string (optional) - User's display name
-    //   - role: string (required, enum: ["borrower", "lender"]) - The user's role
+    //   - role: string (required, enum: ["borrower", "lender", "admin", "broker"]) - The user's role
     //   - createdAt: timestamp (required) - Creation time
     //   - notificationPreferences: object (optional) - User's notification settings
-    //     - emailFrequency: string (enum: ["instant", "daily", "weekly", "none"])
-    //     - applicationUpdates: boolean
-    //     - newProposals: boolean
-    //     - marketingEmails: boolean
+    //   - permissions: object (optional) - Granular user permissions
+    //     - canApproveLoans: boolean
+    //     - canViewAllApplications: boolean
+    //     - canManageUsers: boolean
+    //     - canEditApplications: boolean
     //
     // Collection: applications
     // Document ID: {applicationId}
@@ -26,12 +27,24 @@ service cloud.firestore {
     //   - borrowerName: string (required) - Name of the borrower
     //   - amount: number (required, positive) - Requested loan amount
     //   - purpose: string (required, size < 500) - Purpose of the loan
-    //   - status: string (required, enum: ["pending", "reviewing", "approved", "rejected"]) - Application status
+    //   - status: string (required, enum: ["pending", "reviewing", "approved", "rejected", "proposed"]) - Application status
     //   - creditScore: number (optional, range 300-850) - Estimated credit score
     //   - annualIncome: number (optional, positive) - Annual income
     //   - createdAt: timestamp (required) - Creation time
     //   - updatedAt: timestamp (required) - Last update time
     //   - lenderNotes: string (optional, size < 1000) - Notes from the lender
+    //   - brokerId: string (optional) - UID of the broker
+    //   - brokerEmail: string (optional) - Email of the broker
+    //
+    // Collection: brokerConfigs
+    // Document ID: {brokerId}
+    // Fields:
+    //   - brokerId: string (required)
+    //   - companyName: string (required)
+    //   - logoUrl: string (optional)
+    //   - primaryColor: string (required, hex)
+    //   - welcomeMessage: string (optional)
+    //   - updatedAt: timestamp (required)
     //
     // ===============================================================
 
@@ -46,15 +59,44 @@ service cloud.firestore {
       return isAuthenticated() && request.auth.uid == userId;
     }
 
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
     function isAdmin() {
       return isAuthenticated() &&
-        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+        (getUserData().role == 'admin' ||
           (request.auth.token.email == "RCKONDA@gmail.com" && request.auth.token.email_verified == true));
     }
 
-    function isLender() {
+    function hasPermission(permission) {
       return isAuthenticated() && 
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'lender';
+        ('permissions' in getUserData()) && 
+        (getUserData().permissions[permission] == true);
+    }
+
+    function canManageUsers() {
+      return isAdmin() || hasPermission('canManageUsers');
+    }
+
+    function canApproveLoans() {
+      return isAdmin() || isLender() || hasPermission('canApproveLoans');
+    }
+
+    function canViewAllApplications() {
+      return isAdmin() || isLender() || hasPermission('canViewAllApplications');
+    }
+
+    function canEditApplications() {
+      return isAdmin() || hasPermission('canEditApplications');
+    }
+
+    function isLender() {
+      return isAuthenticated() && getUserData().role == 'lender';
+    }
+
+    function isBroker() {
+      return isAuthenticated() && getUserData().role == 'broker';
     }
 
     function hasRequiredFields(fields) {
@@ -73,10 +115,10 @@ service cloud.firestore {
     // Domain Validators
     // ===============================================================
     function isValidUser(data) {
-      return hasOnlyAllowedFields(['uid', 'email', 'displayName', 'role', 'createdAt', 'notificationPreferences']) &&
+      return hasOnlyAllowedFields(['uid', 'email', 'displayName', 'role', 'createdAt', 'notificationPreferences', 'permissions']) &&
              data.uid == request.auth.uid &&
              isValidEmail(data.email) &&
-             data.role in ['borrower', 'lender', 'admin'] &&
+             data.role in ['borrower', 'lender', 'admin', 'broker'] &&
              data.createdAt is timestamp &&
              (!('notificationPreferences' in data) || (
                data.notificationPreferences is map &&
@@ -85,6 +127,14 @@ service cloud.firestore {
                data.notificationPreferences.applicationUpdates is bool &&
                data.notificationPreferences.newProposals is bool &&
                data.notificationPreferences.marketingEmails is bool
+             )) &&
+             (!('permissions' in data) || (
+               data.permissions is map &&
+               data.permissions.keys().hasOnly(['canApproveLoans', 'canViewAllApplications', 'canManageUsers', 'canEditApplications']) &&
+               data.permissions.canApproveLoans is bool &&
+               data.permissions.canViewAllApplications is bool &&
+               data.permissions.canManageUsers is bool &&
+               data.permissions.canEditApplications is bool
              ));
     }
 
@@ -94,12 +144,24 @@ service cloud.firestore {
              data.borrowerName is string && data.borrowerName.size() > 0 && data.borrowerName.size() < 100 &&
              data.amount is number && data.amount > 0 &&
              data.purpose is string && data.purpose.size() > 0 && data.purpose.size() < 500 &&
-             data.status in ['pending', 'reviewing', 'approved', 'rejected'] &&
+             data.status in ['pending', 'reviewing', 'approved', 'rejected', 'proposed'] &&
              data.createdAt is timestamp &&
              data.updatedAt is timestamp &&
+             (!('brokerId' in data) || (data.brokerId is string)) &&
+             (!('brokerEmail' in data) || (data.brokerEmail is string)) &&
              (!('creditScore' in data) || (data.creditScore is number && data.creditScore >= 300 && data.creditScore <= 850)) &&
              (!('annualIncome' in data) || (data.annualIncome is number && data.annualIncome >= 0)) &&
              (!('lenderNotes' in data) || (data.lenderNotes is string && data.lenderNotes.size() < 1000));
+    }
+
+    function isValidBrokerConfig(data) {
+      return hasOnlyAllowedFields(['brokerId', 'companyName', 'logoUrl', 'primaryColor', 'welcomeMessage', 'updatedAt']) &&
+             data.brokerId == request.auth.uid &&
+             data.companyName is string && data.companyName.size() > 0 && data.companyName.size() < 100 &&
+             data.primaryColor is string && data.primaryColor.matches("^#[0-9a-fA-F]{6}$") &&
+             (!('logoUrl' in data) || (data.logoUrl is string && data.logoUrl.size() < 500)) &&
+             (!('welcomeMessage' in data) || (data.welcomeMessage is string && data.welcomeMessage.size() < 1000)) &&
+             data.updatedAt is timestamp;
     }
 
     // ===============================================================
@@ -108,18 +170,30 @@ service cloud.firestore {
     match /users/{userId} {
       allow read: if isAuthenticated();
       allow create: if isOwner(userId) && isValidUser(request.resource.data);
-      allow update: if (isOwner(userId) && isValidUser(request.resource.data) && request.resource.data.role == resource.data.role) || isAdmin();
+      allow update: if (isOwner(userId) && isValidUser(request.resource.data) && request.resource.data.role == resource.data.role && !('permissions' in request.resource.data)) || canManageUsers();
+      allow delete: if canManageUsers();
+    }
+
+    match /brokerConfigs/{brokerId} {
+      allow read: if true;
+      allow write: if (isOwner(brokerId) && isBroker() && isValidBrokerConfig(request.resource.data)) || isAdmin();
+    }
+
+    match /userInvites/{inviteId} {
+      allow read: if isAuthenticated() && (request.auth.token.email == resource.data.email || canManageUsers());
+      allow write: if canManageUsers();
     }
 
     match /applications/{applicationId} {
-      allow read: if isAuthenticated() && (request.auth.uid == resource.data.borrowerId || isLender() || isAdmin());
-      allow create: if isAuthenticated() && isValidApplication(request.resource.data) && request.resource.data.borrowerId == request.auth.uid;
+      allow read: if isAuthenticated() && (request.auth.uid == resource.data.borrowerId || (('brokerId' in resource.data) && request.auth.uid == resource.data.brokerId) || canViewAllApplications());
+      allow create: if isAuthenticated() && isValidApplication(request.resource.data) && (request.resource.data.borrowerId == request.auth.uid || (('brokerId' in request.resource.data) && request.resource.data.brokerId == request.auth.uid));
       allow update: if isAuthenticated() && isValidApplication(request.resource.data) && (
         (request.auth.uid == resource.data.borrowerId && request.resource.data.status == resource.data.status) ||
-        isLender() || 
-        isAdmin()
+        (('brokerId' in resource.data) && request.auth.uid == resource.data.brokerId && request.resource.data.status == resource.data.status) ||
+        (canApproveLoans() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'lenderNotes', 'updatedAt'])) ||
+        canEditApplications()
       );
-      allow delete: if isAdmin();
+      allow delete: if canManageUsers();
     }
   }
 }

@@ -4,6 +4,7 @@ export enum UserRole {
   BORROWER = 'borrower',
   LENDER = 'lender',
   ADMIN = 'admin',
+  BROKER = 'broker',
 }
 
 export interface NotificationPreferences {
@@ -13,6 +14,13 @@ export interface NotificationPreferences {
   marketingEmails: boolean;
 }
 
+export interface UserPermissions {
+  canApproveLoans: boolean;
+  canViewAllApplications: boolean;
+  canManageUsers: boolean;
+  canEditApplications: boolean;
+}
+
 export interface UserProfile {
   uid: string;
   email: string;
@@ -20,6 +28,7 @@ export interface UserProfile {
   role: UserRole;
   createdAt: Timestamp;
   notificationPreferences?: NotificationPreferences;
+  permissions?: UserPermissions;
 }
 
 export enum ApplicationStatus {
@@ -104,6 +113,8 @@ export interface LoanApplication {
   nsr?: number;
   dsr?: number;
   proposedModifications?: ProposedModifications;
+  brokerId?: string;
+  brokerEmail?: string;
   // Legacy fields (optional now)
   creditScore?: number;
   annualIncome?: number;
@@ -128,6 +139,23 @@ export interface LoanApplication {
   dependents?: number;
   monthlyExpenses?: number;
   otherMonthlyDebts?: number;
+}
+
+export interface WhiteLabelConfig {
+  brokerId: string;
+  companyName: string;
+  logoUrl?: string;
+  primaryColor: string;
+  welcomeMessage?: string;
+  updatedAt: Timestamp;
+}
+
+export interface UserInvite {
+  id: string;
+  email: string;
+  role: UserRole;
+  invitedBy: string;
+  createdAt: Timestamp;
 }
 
 export enum OperationType {

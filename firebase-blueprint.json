@@ -8,7 +8,7 @@
         "uid": { "type": "string", "description": "Firebase Auth UID" },
         "email": { "type": "string", "format": "email" },
         "displayName": { "type": "string" },
-        "role": { "type": "string", "enum": ["borrower", "lender"], "description": "The user's role in the system." },
+        "role": { "type": "string", "enum": ["borrower", "lender", "admin", "broker"], "description": "The user's role in the system." },
         "createdAt": { "type": "string", "format": "date-time" },
         "notificationPreferences": {
           "type": "object",
@@ -17,6 +17,15 @@
             "applicationUpdates": { "type": "boolean" },
             "newProposals": { "type": "boolean" },
             "marketingEmails": { "type": "boolean" }
+          }
+        },
+        "permissions": {
+          "type": "object",
+          "properties": {
+            "canApproveLoans": { "type": "boolean" },
+            "canViewAllApplications": { "type": "boolean" },
+            "canManageUsers": { "type": "boolean" },
+            "canEditApplications": { "type": "boolean" }
           }
         }
       },
@@ -32,7 +41,9 @@
         "borrowerName": { "type": "string" },
         "amount": { "type": "number", "description": "Requested loan amount." },
         "purpose": { "type": "string", "description": "Purpose of the loan." },
-        "status": { "type": "string", "enum": ["pending", "reviewing", "approved", "rejected"], "default": "pending" },
+        "status": { "type": "string", "enum": ["pending", "reviewing", "approved", "rejected", "proposed"], "default": "pending" },
+        "brokerId": { "type": "string", "description": "UID of the broker who submitted the application." },
+        "brokerEmail": { "type": "string", "format": "email" },
         "creditScore": { "type": "number", "description": "Estimated credit score." },
         "annualIncome": { "type": "number" },
         "createdAt": { "type": "string", "format": "date-time" },
@@ -51,6 +62,32 @@
         }
       },
       "required": ["borrowerId", "amount", "purpose", "status"]
+    },
+    "WhiteLabelConfig": {
+      "title": "White Label Configuration",
+      "description": "Custom branding settings for a broker.",
+      "type": "object",
+      "properties": {
+        "brokerId": { "type": "string" },
+        "companyName": { "type": "string" },
+        "logoUrl": { "type": "string", "format": "uri" },
+        "primaryColor": { "type": "string", "description": "Hex color code." },
+        "welcomeMessage": { "type": "string" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["brokerId", "companyName", "primaryColor"]
+    },
+    "UserInvite": {
+      "title": "User Invitation",
+      "description": "A pre-authorized invitation for a user to join with a specific role.",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string", "format": "email" },
+        "role": { "type": "string", "enum": ["borrower", "lender", "admin", "broker"] },
+        "invitedBy": { "type": "string", "description": "UID of the admin who invited the user." },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["email", "role", "invitedBy", "createdAt"]
     }
   },
   "firestore": {
@@ -61,6 +98,14 @@
     "/applications/{applicationId}": {
       "schema": "LoanApplication",
       "description": "Loan applications."
+    },
+    "/brokerConfigs/{brokerId}": {
+      "schema": "WhiteLabelConfig",
+      "description": "White label configurations for brokers."
+    },
+    "/userInvites/{inviteId}": {
+      "schema": "UserInvite",
+      "description": "Pre-authorized user invitations."
     }
   }
 }

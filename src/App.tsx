@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useCallback, Component } from 'react';
 import { AuthProvider, useAuth } from './components/AuthContext';
-import { UserRole, ApplicationStatus, LoanApplication, OperationType, UserProfile, LoanDocument, Asset, Liability, Applicant, NotificationPreferences } from './types';
+import { UserRole, ApplicationStatus, LoanApplication, OperationType, UserProfile, LoanDocument, Asset, Liability, Applicant, NotificationPreferences, UserPermissions, WhiteLabelConfig, UserInvite } from './types';
 import { db, auth, storage } from './firebase';
-import { collection, addDoc, query, where, onSnapshot, serverTimestamp, doc, updateDoc, deleteDoc, getDocs, deleteField, Timestamp } from 'firebase/firestore';
+import { collection, addDoc, query, where, onSnapshot, serverTimestamp, doc, updateDoc, deleteDoc, getDocs, deleteField, Timestamp, setDoc } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { handleFirestoreError } from './utils/firestore';
 import { motion, AnimatePresence } from 'motion/react';
@@ -28,6 +28,7 @@ import {
   File,
   BarChart3,
   Activity,
+  Calculator,
   PieChart,
   Phone,
   Mail,
@@ -47,7 +48,9 @@ import {
   Download,
   ArrowDownWideNarrow,
   ArrowUpWideNarrow,
-  Settings
+  Settings,
+  Shield,
+  X
 } from 'lucide-react';
 import { format, startOfDay, subDays, isSameDay } from 'date-fns';
 import { clsx, type ClassValue } from 'clsx';
@@ -133,6 +136,262 @@ class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
     return this.props.children;
   }
 }
+
+const LoanCalculator = () => {
+  const { config } = useBranding();
+  const [amount, setAmount] = useState(50000);
+  const [rate, setRate] = useState(8.5);
+  const [term, setTerm] = useState(60);
+  const [monthlyPayment, setMonthlyPayment] = useState(0);
+
+  useEffect(() => {
+    const r = rate / 100 / 12;
+    const n = term;
+    const p = amount;
+    
+    if (r === 0) {
+      setMonthlyPayment(p / n);
+    } else {
+      const payment = (p * r * Math.pow(1 + r, n)) / (Math.pow(1 + r, n) - 1);
+      setMonthlyPayment(payment);
+    }
+  }, [amount, rate, term]);
+
+  return (
+    <div className="bg-white p-8 rounded-[2.5rem] border border-zinc-200 shadow-sm">
+      <div className="flex items-center gap-3 mb-6">
+        <div className="w-10 h-10 bg-zinc-100 rounded-2xl flex items-center justify-center">
+          <Calculator className="w-5 h-5 text-zinc-900" />
+        </div>
+        <h3 className="text-xl font-bold text-zinc-900">Loan Calculator</h3>
+      </div>
+
+      <div className="space-y-6">
+        <div>
+          <div className="flex justify-between mb-2">
+            <label className="text-xs font-bold text-zinc-400 uppercase tracking-wider">Loan Amount</label>
+            <span className="text-sm font-bold text-zinc-900">${amount.toLocaleString()}</span>
+          </div>
+          <input 
+            type="range"
+            min="1000"
+            max="500000"
+            step="1000"
+            value={amount}
+            onChange={(e) => setAmount(Number(e.target.value))}
+            className="w-full h-2 bg-zinc-100 rounded-lg appearance-none cursor-pointer accent-zinc-900"
+            style={{ accentColor: config?.primaryColor }}
+          />
+        </div>
+
+        <div>
+          <div className="flex justify-between mb-2">
+            <label className="text-xs font-bold text-zinc-400 uppercase tracking-wider">Interest Rate (%)</label>
+            <span className="text-sm font-bold text-zinc-900">{rate}%</span>
+          </div>
+          <input 
+            type="range"
+            min="1"
+            max="25"
+            step="0.1"
+            value={rate}
+            onChange={(e) => setRate(Number(e.target.value))}
+            className="w-full h-2 bg-zinc-100 rounded-lg appearance-none cursor-pointer accent-zinc-900"
+            style={{ accentColor: config?.primaryColor }}
+          />
+        </div>
+
+        <div>
+          <div className="flex justify-between mb-2">
+            <label className="text-xs font-bold text-zinc-400 uppercase tracking-wider">Loan Term (Months)</label>
+            <span className="text-sm font-bold text-zinc-900">{term} mo</span>
+          </div>
+          <input 
+            type="range"
+            min="6"
+            max="360"
+            step="6"
+            value={term}
+            onChange={(e) => setTerm(Number(e.target.value))}
+            className="w-full h-2 bg-zinc-100 rounded-lg appearance-none cursor-pointer accent-zinc-900"
+            style={{ accentColor: config?.primaryColor }}
+          />
+        </div>
+
+        <div className="pt-6 border-t border-zinc-100">
+          <div className="text-xs font-bold text-zinc-400 uppercase tracking-wider mb-2 text-center">Estimated Monthly Payment</div>
+          <div className="text-4xl font-bold text-zinc-900 text-center" style={{ color: config?.primaryColor }}>
+            ${monthlyPayment.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const BrokerBrandingSettings = () => {
+  const { user } = useAuth();
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [formData, setFormData] = useState({
+    companyName: '',
+    primaryColor: '#18181b',
+    welcomeMessage: '',
+    logoUrl: ''
+  });
+
+  useEffect(() => {
+    if (!user) return;
+    const unsubscribe = onSnapshot(doc(db, 'brokerConfigs', user.uid), (docSnap) => {
+      if (docSnap.exists()) {
+        const data = docSnap.data() as WhiteLabelConfig;
+        setFormData({
+          companyName: data.companyName,
+          primaryColor: data.primaryColor,
+          welcomeMessage: data.welcomeMessage || '',
+          logoUrl: data.logoUrl || ''
+        });
+      }
+      setLoading(false);
+    });
+    return () => unsubscribe();
+  }, [user]);
+
+  const handleSave = async () => {
+    if (!user) return;
+    setSaving(true);
+    try {
+      const docRef = doc(db, 'brokerConfigs', user.uid);
+      await setDoc(docRef, {
+        ...formData,
+        brokerId: user.uid,
+        updatedAt: serverTimestamp()
+      }, { merge: true });
+    } catch (error) {
+      console.error('Error saving branding config:', error);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (loading) return (
+    <div className="flex items-center justify-center p-12">
+      <motion.div 
+        animate={{ rotate: 360 }}
+        transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
+        className="w-10 h-10 border-4 border-zinc-200 border-t-zinc-900 rounded-full"
+      />
+    </div>
+  );
+
+  return (
+    <div className="max-w-4xl mx-auto">
+      <header className="mb-12">
+        <h2 className="text-4xl font-bold tracking-tight text-zinc-900 mb-2">Branding</h2>
+        <p className="text-zinc-500">Customize your white-label version of LendFlow.</p>
+      </header>
+
+      <div className="space-y-8">
+        <section className="bg-white p-8 rounded-[2.5rem] border border-zinc-200 shadow-sm">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+            <div className="space-y-6">
+              <div>
+                <label className="block text-sm font-bold text-zinc-400 uppercase tracking-wider mb-3">Company Name</label>
+                <input 
+                  type="text"
+                  value={formData.companyName}
+                  onChange={(e) => setFormData({ ...formData, companyName: e.target.value })}
+                  className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-zinc-900 transition-all"
+                  placeholder="e.g. Acme Mortgages"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-bold text-zinc-400 uppercase tracking-wider mb-3">Primary Color</label>
+                <div className="flex gap-4 items-center">
+                  <input 
+                    type="color"
+                    value={formData.primaryColor}
+                    onChange={(e) => setFormData({ ...formData, primaryColor: e.target.value })}
+                    className="w-12 h-12 rounded-lg border-none cursor-pointer"
+                  />
+                  <input 
+                    type="text"
+                    value={formData.primaryColor}
+                    onChange={(e) => setFormData({ ...formData, primaryColor: e.target.value })}
+                    className="flex-1 px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-zinc-900 transition-all font-mono"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="block text-sm font-bold text-zinc-400 uppercase tracking-wider mb-3">Logo URL</label>
+                <input 
+                  type="text"
+                  value={formData.logoUrl}
+                  onChange={(e) => setFormData({ ...formData, logoUrl: e.target.value })}
+                  className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-zinc-900 transition-all"
+                  placeholder="https://example.com/logo.png"
+                />
+              </div>
+            </div>
+
+            <div className="space-y-6">
+              <div>
+                <label className="block text-sm font-bold text-zinc-400 uppercase tracking-wider mb-3">Welcome Message</label>
+                <textarea 
+                  value={formData.welcomeMessage}
+                  onChange={(e) => setFormData({ ...formData, welcomeMessage: e.target.value })}
+                  className="w-full h-32 px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-zinc-900 transition-all resize-none"
+                  placeholder="Welcome to our mortgage portal..."
+                />
+              </div>
+              
+              <div className="p-6 bg-zinc-50 rounded-2xl border border-zinc-200">
+                <div className="text-xs font-bold text-zinc-400 uppercase tracking-wider mb-4">Preview</div>
+                <div className="bg-white p-4 rounded-xl border border-zinc-200 flex items-center gap-3">
+                  <div className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ backgroundColor: formData.primaryColor }}>
+                    {formData.logoUrl ? <img src={formData.logoUrl} alt="Logo" className="w-5 h-5 object-contain" referrerPolicy="no-referrer" /> : <TrendingUp className="text-white w-5 h-5" />}
+                  </div>
+                  <span className="font-bold text-zinc-900">{formData.companyName || 'LendFlow'}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-8 pt-8 border-t border-zinc-100 flex justify-end">
+            <button 
+              onClick={handleSave}
+              disabled={saving}
+              className="px-8 py-3 bg-zinc-900 text-white rounded-xl font-bold hover:bg-zinc-800 transition-all shadow-lg disabled:opacity-50"
+            >
+              {saving ? 'Saving...' : 'Save Branding'}
+            </button>
+          </div>
+        </section>
+
+        <section className="bg-white p-8 rounded-[2.5rem] border border-zinc-200 shadow-sm">
+          <h3 className="text-xl font-bold text-zinc-900 mb-4">Shareable Link</h3>
+          <p className="text-zinc-500 mb-6">Use this link to share your branded portal with your clients.</p>
+          <div className="flex gap-4">
+            <input 
+              type="text"
+              readOnly
+              value={`${window.location.origin}?brokerId=${user?.uid}`}
+              className="flex-1 px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl font-mono text-sm"
+            />
+            <button 
+              onClick={() => {
+                navigator.clipboard.writeText(`${window.location.origin}?brokerId=${user?.uid}`);
+              }}
+              className="px-6 py-3 bg-zinc-100 text-zinc-900 rounded-xl font-bold hover:bg-zinc-200 transition-all"
+            >
+              Copy Link
+            </button>
+          </div>
+        </section>
+      </div>
+    </div>
+  );
+};
 
 const SettingsView = () => {
   const { profile, updateNotificationPreferences } = useAuth();
@@ -252,18 +511,20 @@ const SettingsView = () => {
 
 const LandingPage = () => {
   const { signIn } = useAuth();
+  const { config } = useBranding();
   return (
     <div className="min-h-screen bg-zinc-50 font-sans">
       <nav className="max-w-7xl mx-auto px-6 py-8 flex justify-between items-center">
         <div className="flex items-center gap-2">
-          <div className="w-10 h-10 bg-zinc-900 rounded-xl flex items-center justify-center">
-            <TrendingUp className="text-white w-6 h-6" />
+          <div className="w-10 h-10 bg-zinc-900 rounded-xl flex items-center justify-center" style={{ backgroundColor: config?.primaryColor }}>
+            {config?.logoUrl ? <img src={config.logoUrl} alt="Logo" className="w-6 h-6 object-contain" referrerPolicy="no-referrer" /> : <TrendingUp className="text-white w-6 h-6" />}
           </div>
-          <span className="text-xl font-bold tracking-tight text-zinc-900">LendFlow</span>
+          <span className="text-xl font-bold tracking-tight text-zinc-900">{config?.companyName || 'LendFlow'}</span>
         </div>
         <button 
           onClick={signIn}
           className="px-6 py-2.5 bg-zinc-900 text-white rounded-full font-medium hover:bg-zinc-800 transition-all shadow-sm"
+          style={{ backgroundColor: config?.primaryColor }}
         >
           Sign In
         </button>
@@ -276,8 +537,8 @@ const LandingPage = () => {
           transition={{ duration: 0.6 }}
         >
           <h1 className="text-7xl font-bold leading-[0.9] tracking-tight text-zinc-900 mb-8">
-            Modern Loan <br />
-            <span className="text-zinc-400">Origination.</span>
+            {config?.welcomeMessage ? config.welcomeMessage.split('\n')[0] : 'Modern Loan'} <br />
+            <span className="text-zinc-400">{config?.welcomeMessage ? config.welcomeMessage.split('\n')[1] || 'Origination.' : 'Origination.'}</span>
           </h1>
           <p className="text-xl text-zinc-600 mb-10 max-w-lg leading-relaxed">
             A streamlined platform for borrowers to secure funding and lenders to manage risk with precision. Simple, secure, and transparent.
@@ -340,13 +601,53 @@ const LandingPage = () => {
 };
 
 const RoleSelection = () => {
-  const { updateProfile } = useAuth();
+  const { user, updateProfile } = useAuth();
   const [loading, setLoading] = useState<UserRole | null>(null);
+  const [checkingInvite, setCheckingInvite] = useState(true);
 
   const handleSelect = async (role: UserRole) => {
     setLoading(role);
     await updateProfile(role);
   };
+
+  useEffect(() => {
+    const checkInvite = async () => {
+      if (!user?.email) {
+        setCheckingInvite(false);
+        return;
+      }
+      
+      try {
+        const q = query(collection(db, 'userInvites'), where('email', '==', user.email));
+        const snapshot = await getDocs(q);
+        
+        if (!snapshot.empty) {
+          const invite = snapshot.docs[0].data() as UserInvite;
+          await handleSelect(invite.role);
+          // Delete the invite after use
+          await deleteDoc(doc(db, 'userInvites', snapshot.docs[0].id));
+        }
+      } catch (error) {
+        console.error('Error checking invite:', error);
+      } finally {
+        setCheckingInvite(false);
+      }
+    };
+    
+    checkInvite();
+  }, [user?.email]);
+
+  if (checkingInvite || loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-zinc-50">
+        <motion.div 
+          animate={{ rotate: 360 }}
+          transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
+          className="w-10 h-10 border-4 border-zinc-200 border-t-zinc-900 rounded-full"
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-zinc-50 flex items-center justify-center p-6">
@@ -356,7 +657,7 @@ const RoleSelection = () => {
           <p className="text-zinc-500 text-lg">Select how you want to use LendFlow</p>
         </div>
 
-        <div className="grid md:grid-cols-2 gap-8">
+        <div className="grid md:grid-cols-3 gap-8">
           <button 
             onClick={() => handleSelect(UserRole.BORROWER)}
             disabled={!!loading}
@@ -371,6 +672,23 @@ const RoleSelection = () => {
             </p>
             <div className="flex items-center gap-2 font-bold text-zinc-900">
               Get Started <ArrowRight className="w-5 h-5" />
+            </div>
+          </button>
+
+          <button 
+            onClick={() => handleSelect(UserRole.BROKER)}
+            disabled={!!loading}
+            className="group relative p-10 bg-white rounded-[2.5rem] border-2 border-transparent hover:border-zinc-900 transition-all text-left shadow-sm hover:shadow-xl disabled:opacity-50"
+          >
+            <div className="w-16 h-16 bg-zinc-100 rounded-2xl flex items-center justify-center mb-8 group-hover:bg-zinc-900 group-hover:text-white transition-colors">
+              <Briefcase className="w-8 h-8" />
+            </div>
+            <h3 className="text-2xl font-bold text-zinc-900 mb-4">I'm a Broker</h3>
+            <p className="text-zinc-500 leading-relaxed mb-8">
+              Submit and manage loan applications for your clients, track commissions, and streamline your workflow.
+            </p>
+            <div className="flex items-center gap-2 font-bold text-zinc-900">
+              Submit Deal <ArrowRight className="w-5 h-5" />
             </div>
           </button>
 
@@ -492,7 +810,7 @@ const DocumentUploadZone = ({ onUpload, loading }: { onUpload: (files: File[]) =
         type="file"
         multiple
         onChange={handleChange}
-        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
       />
       <div className="flex flex-col items-center gap-2">
         <Upload className="w-8 h-8 text-zinc-400" />
@@ -519,8 +837,10 @@ const ErrorMessage = ({ message }: { message?: string }) => {
 };
 
 const BorrowerDashboard = () => {
-  const { user, signOut } = useAuth();
-  const [view, setView] = useState<'dashboard' | 'settings'>('dashboard');
+  const { user, profile, signOut } = useAuth();
+  const { config } = useBranding();
+  const isBroker = profile?.role === UserRole.BROKER;
+  const [view, setView] = useState<'dashboard' | 'settings' | 'branding'>('dashboard');
   const [applications, setApplications] = useState<LoanApplication[]>([]);
   const [showForm, setShowForm] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -655,7 +975,9 @@ const BorrowerDashboard = () => {
 
   useEffect(() => {
     if (!user) return;
-    const q = query(collection(db, 'applications'), where('borrowerId', '==', user.uid));
+    const q = isBroker 
+      ? query(collection(db, 'applications'), where('brokerId', '==', user.uid))
+      : query(collection(db, 'applications'), where('borrowerId', '==', user.uid));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const apps = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as LoanApplication));
       setApplications(apps.sort((a, b) => {
@@ -1021,6 +1343,8 @@ const BorrowerDashboard = () => {
 
       const appData = {
         borrowerId: user.uid,
+        brokerId: isBroker ? user.uid : undefined,
+        brokerEmail: isBroker ? user.email || '' : undefined,
         borrowerName: finalApplicants[0].name || user.displayName || 'Anonymous',
         borrowerEmail: finalApplicants[0].email || user.email || '',
         applicants: finalApplicants,
@@ -1065,20 +1389,30 @@ const BorrowerDashboard = () => {
   };
 
   const handleAddDocumentToExisting = async (appId: string, files: File[]) => {
-    if (!user) return;
+    if (!user) {
+      console.error('No user found in handleAddDocumentToExisting');
+      return;
+    }
+    console.log('Adding documents to application:', appId, 'Files:', files.map(f => f.name));
     setUploadingDoc(appId);
     try {
       const app = applications.find(a => a.id === appId);
-      if (!app) throw new Error('Application not found');
+      if (!app) {
+        console.error('Application not found for ID:', appId, 'Available applications:', applications.map(a => a.id));
+        throw new Error('Application not found');
+      }
       
+      console.log('Found application:', app.id, 'Borrower ID:', app.borrowerId);
       // Use the borrower's ID for the storage path, not the current user's (who might be a lender)
       const newDocs = await uploadFiles(files, app.borrowerId);
+      console.log('Uploaded new documents:', newDocs);
       const currentDocs = app.documents || [];
       
       await updateDoc(doc(db, 'applications', appId), {
         documents: [...currentDocs, ...newDocs],
         updatedAt: serverTimestamp(),
       });
+      console.log('Application updated successfully with new documents');
       setToast({ message: 'Documents uploaded successfully!', type: 'success' });
     } catch (error) {
       console.error('Error adding document:', error);
@@ -1098,10 +1432,10 @@ const BorrowerDashboard = () => {
       {/* Sidebar */}
       <aside className="w-72 bg-white border-r border-zinc-200 p-8 flex flex-col">
         <div className="flex items-center gap-2 mb-12">
-          <div className="w-8 h-8 bg-zinc-900 rounded-lg flex items-center justify-center">
-            <TrendingUp className="text-white w-5 h-5" />
+          <div className="w-8 h-8 bg-zinc-900 rounded-lg flex items-center justify-center" style={{ backgroundColor: config?.primaryColor }}>
+            {config?.logoUrl ? <img src={config.logoUrl} alt="Logo" className="w-5 h-5 object-contain" referrerPolicy="no-referrer" /> : <TrendingUp className="text-white w-5 h-5" />}
           </div>
-          <span className="text-lg font-bold tracking-tight text-zinc-900">LendFlow</span>
+          <span className="text-lg font-bold tracking-tight text-zinc-900">{config?.companyName || 'LendFlow'}</span>
         </div>
 
         <nav className="flex-1 space-y-2">
@@ -1115,6 +1449,18 @@ const BorrowerDashboard = () => {
             <LayoutDashboard className="w-5 h-5" />
             Dashboard
           </button>
+          {isBroker && (
+            <button 
+              onClick={() => setView('branding')}
+              className={cn(
+                "w-full flex items-center gap-3 px-4 py-3 rounded-xl font-medium transition-all",
+                view === 'branding' ? "bg-zinc-100 text-zinc-900" : "text-zinc-500 hover:text-zinc-900 hover:bg-zinc-50"
+              )}
+            >
+              <Shield className="w-5 h-5" />
+              Branding
+            </button>
+          )}
           <button 
             onClick={() => setView('settings')}
             className={cn(
@@ -1149,12 +1495,18 @@ const BorrowerDashboard = () => {
       <main className="flex-1 p-12 overflow-y-auto">
         {view === 'settings' ? (
           <SettingsView />
+        ) : view === 'branding' ? (
+          <BrokerBrandingSettings />
         ) : (
           <>
             <header className="flex justify-between items-end mb-12">
           <div>
-            <h2 className="text-4xl font-bold tracking-tight text-zinc-900 mb-2">Welcome back</h2>
-            <p className="text-zinc-500">Manage your loan applications and funding status.</p>
+            <h2 className="text-4xl font-bold tracking-tight text-zinc-900 mb-2">
+              {config?.welcomeMessage ? config.welcomeMessage.split('\n')[0] : 'Welcome back'}
+            </h2>
+            <p className="text-zinc-500">
+              {config?.welcomeMessage ? config.welcomeMessage.split('\n').slice(1).join(' ') : (isBroker ? 'Manage your client deals and track commissions.' : 'Manage your loan applications and funding status.')}
+            </p>
           </div>
           <button 
             onClick={() => {
@@ -1162,25 +1514,54 @@ const BorrowerDashboard = () => {
               setShowForm(true);
             }}
             className="px-6 py-3 bg-zinc-900 text-white rounded-xl font-bold hover:bg-zinc-800 transition-all flex items-center gap-2 shadow-lg"
+            style={{ backgroundColor: config?.primaryColor }}
           >
             <PlusCircle className="w-5 h-5" />
-            New Application
+            {isBroker ? 'New Deal' : 'New Application'}
           </button>
         </header>
 
-        {/* Stats Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-12">
-          <div className="bg-white p-8 rounded-[2.5rem] border border-zinc-200 shadow-sm">
-            <div className="text-xs font-bold text-zinc-400 uppercase tracking-wider mb-2">Total Applied</div>
-            <div className="text-3xl font-bold text-zinc-900">${stats.totalApplied.toLocaleString()}</div>
+        {/* Stats & Calculator Grid */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 mb-12">
+          <div className="lg:col-span-2 grid grid-cols-1 md:grid-cols-3 gap-6">
+            <div className="bg-white p-8 rounded-[2.5rem] border border-zinc-200 shadow-sm">
+              <div className="text-xs font-bold text-zinc-400 uppercase tracking-wider mb-2">
+                {isBroker ? 'Total Value' : 'Total Applied'}
+              </div>
+              <div className="text-3xl font-bold text-zinc-900">${stats.totalApplied.toLocaleString()}</div>
+            </div>
+            <div className="bg-white p-8 rounded-[2.5rem] border border-zinc-200 shadow-sm">
+              <div className="text-xs font-bold text-zinc-400 uppercase tracking-wider mb-2">
+                {isBroker ? 'Active Deals' : 'Active Applications'}
+              </div>
+              <div className="text-3xl font-bold text-zinc-900">{stats.activeCount}</div>
+            </div>
+            <div className="bg-white p-8 rounded-[2.5rem] border border-zinc-200 shadow-sm">
+              <div className="text-xs font-bold text-zinc-400 uppercase tracking-wider mb-2">Approved Funding</div>
+              <div className="text-3xl font-bold text-emerald-600">${stats.approvedAmount.toLocaleString()}</div>
+            </div>
+            
+            <div className="md:col-span-3 bg-zinc-900 p-8 rounded-[2.5rem] text-white relative overflow-hidden group" style={{ backgroundColor: config?.primaryColor }}>
+              <div className="relative z-10">
+                <h3 className="text-2xl font-bold mb-2">Ready for your next move?</h3>
+                <p className="text-zinc-300 mb-6 max-w-md">Our lenders are active and looking for quality applications. Start a new request today.</p>
+                <button 
+                  onClick={() => {
+                    resetForm();
+                    setShowForm(true);
+                  }}
+                  className="px-6 py-3 bg-white text-zinc-900 rounded-xl font-bold hover:bg-zinc-100 transition-all flex items-center gap-2"
+                >
+                  <PlusCircle className="w-5 h-5" />
+                  {isBroker ? 'New Deal' : 'New Application'}
+                </button>
+              </div>
+              <TrendingUp className="absolute -right-8 -bottom-8 w-64 h-64 text-white/5 group-hover:scale-110 transition-transform duration-700" />
+            </div>
           </div>
-          <div className="bg-white p-8 rounded-[2.5rem] border border-zinc-200 shadow-sm">
-            <div className="text-xs font-bold text-zinc-400 uppercase tracking-wider mb-2">Active Applications</div>
-            <div className="text-3xl font-bold text-zinc-900">{stats.activeCount}</div>
-          </div>
-          <div className="bg-white p-8 rounded-[2.5rem] border border-zinc-200 shadow-sm">
-            <div className="text-xs font-bold text-zinc-400 uppercase tracking-wider mb-2">Approved Funding</div>
-            <div className="text-3xl font-bold text-emerald-600">${stats.approvedAmount.toLocaleString()}</div>
+          
+          <div className="lg:col-span-1">
+            <LoanCalculator />
           </div>
         </div>
 
@@ -1406,7 +1787,7 @@ const BorrowerDashboard = () => {
                                 e.target.value = '';
                               }
                             }}
-                            className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                            className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
                             disabled={uploadingDoc === app.id}
                           />
                           <button className="text-xs font-bold text-zinc-500 hover:text-zinc-900 flex items-center gap-1 transition-colors">
@@ -2977,7 +3358,15 @@ const LenderDashboard = () => {
                   <div className="flex justify-between items-start mb-8">
                     <div>
                       <h3 className="text-3xl font-bold text-zinc-900 mb-1">Review Application</h3>
-                      <p className="text-zinc-500">Borrower: {selectedApp.borrowerName}</p>
+                      <p className="text-zinc-500">
+                        Borrower: {selectedApp.borrowerName}
+                        {selectedApp.brokerEmail && (
+                          <span className="ml-2 inline-flex items-center gap-1 text-xs bg-zinc-100 px-2 py-0.5 rounded-full text-zinc-600 font-medium">
+                            <Briefcase className="w-3 h-3" />
+                            Broker: {selectedApp.brokerEmail}
+                          </span>
+                        )}
+                      </p>
                     </div>
                     <div className="text-right">
                       <div className="text-3xl font-bold text-zinc-900">${selectedApp.amount.toLocaleString()}</div>
@@ -3436,10 +3825,37 @@ const AdminDashboard = () => {
   const { user, signOut } = useAuth();
   const [applications, setApplications] = useState<LoanApplication[]>([]);
   const [users, setUsers] = useState<UserProfile[]>([]);
+  const [invites, setInvites] = useState<UserInvite[]>([]);
+  const [showInviteModal, setShowInviteModal] = useState(false);
+  const [inviteEmail, setInviteEmail] = useState('');
+  const [inviteRole, setInviteRole] = useState<UserRole>(UserRole.BORROWER);
   const [view, setView] = useState<'overview' | 'applications' | 'users' | 'settings'>('overview');
   const [confirmDelete, setConfirmDelete] = useState<{ type: 'app' | 'user', id: string } | null>(null);
   const [selectedAdminApp, setSelectedAdminApp] = useState<LoanApplication | null>(null);
+  const [selectedAdminUser, setSelectedAdminUser] = useState<UserProfile | null>(null);
+  const [userModalTab, setUserModalTab] = useState<'overview' | 'permissions'>('overview');
   const [activeAdminApplicantIndex, setActiveAdminApplicantIndex] = useState(0);
+
+  const handleUpdateUserPermissions = async (uid: string, permissions: Partial<UserPermissions>) => {
+    try {
+      const userToUpdate = users.find(u => u.uid === uid);
+      if (!userToUpdate) return;
+      
+      const updatedPermissions = {
+        ...(userToUpdate.permissions || {
+          canApproveLoans: false,
+          canViewAllApplications: false,
+          canManageUsers: false,
+          canEditApplications: false,
+        }),
+        ...permissions
+      };
+
+      await updateDoc(doc(db, 'users', uid), { permissions: updatedPermissions });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `users/${uid}/permissions`);
+    }
+  };
   const [adminLenderNotes, setAdminLenderNotes] = useState('');
   const [adminInternalNotes, setAdminInternalNotes] = useState('');
 
@@ -3459,6 +3875,7 @@ const AdminDashboard = () => {
   const [appSortBy, setAppSortBy] = useState<'date' | 'amount' | 'name'>('date');
   const [appSortOrder, setAppSortOrder] = useState<'asc' | 'desc'>('desc');
   const [userSearch, setUserSearch] = useState('');
+  const [userRoleFilter, setUserRoleFilter] = useState<UserRole | 'all'>('all');
 
   useEffect(() => {
     // Listen to all applications
@@ -3487,9 +3904,19 @@ const AdminDashboard = () => {
       handleFirestoreError(error, OperationType.LIST, 'users');
     });
 
+    // Listen to all invites
+    const qInvites = collection(db, 'userInvites');
+    const unsubscribeInvites = onSnapshot(qInvites, (snapshot) => {
+      const i = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as UserInvite));
+      setInvites(i);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'userInvites');
+    });
+
     return () => {
       unsubscribeApps();
       unsubscribeUsers();
+      unsubscribeInvites();
     };
   }, []);
 
@@ -3509,6 +3936,30 @@ const AdminDashboard = () => {
       await updateDoc(doc(db, 'users', uid), { role: newRole });
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, `users/${uid}`);
+    }
+  };
+
+  const handleInviteUser = async () => {
+    if (!inviteEmail || !user) return;
+    try {
+      await addDoc(collection(db, 'userInvites'), {
+        email: inviteEmail.toLowerCase().trim(),
+        role: inviteRole,
+        invitedBy: user.uid,
+        createdAt: serverTimestamp()
+      });
+      setInviteEmail('');
+      setShowInviteModal(false);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, 'userInvites');
+    }
+  };
+
+  const handleDeleteInvite = async (id: string) => {
+    try {
+      await deleteDoc(doc(db, 'userInvites', id));
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `userInvites/${id}`);
     }
   };
 
@@ -3640,7 +4091,14 @@ const AdminDashboard = () => {
   const filteredUsers = users.filter(u => {
     const matchesSearch = (u.displayName || '').toLowerCase().includes(userSearch.toLowerCase()) || 
                          u.email.toLowerCase().includes(userSearch.toLowerCase());
-    return matchesSearch;
+    const matchesRole = userRoleFilter === 'all' || u.role === userRoleFilter;
+    return matchesSearch && matchesRole;
+  });
+
+  const filteredInvites = invites.filter(i => {
+    const matchesSearch = i.email.toLowerCase().includes(userSearch.toLowerCase());
+    const matchesRole = userRoleFilter === 'all' || i.role === userRoleFilter;
+    return matchesSearch && matchesRole;
   });
 
   return (
@@ -3729,6 +4187,15 @@ const AdminDashboard = () => {
               </h2>
               <p className="text-zinc-500">Global oversight of the LendFlow platform.</p>
             </div>
+            {view === 'users' && (
+              <button
+                onClick={() => setShowInviteModal(true)}
+                className="flex items-center gap-2 px-6 py-3 bg-zinc-900 text-white rounded-2xl font-bold hover:bg-zinc-800 transition-all shadow-lg"
+              >
+                <PlusCircle className="w-4 h-4" />
+                Invite User
+              </button>
+            )}
             {view === 'applications' && (
               <div className="flex items-center gap-4">
                 <button
@@ -3768,6 +4235,23 @@ const AdminDashboard = () => {
                   className="w-full pl-12 pr-4 py-3 bg-white border border-zinc-200 rounded-2xl focus:outline-none focus:ring-2 focus:ring-zinc-900 transition-all"
                 />
               </div>
+              {view === 'users' && (
+                <div className="flex gap-4 col-span-3">
+                  <div className="relative flex-1">
+                    <Filter className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
+                    <select 
+                      value={userRoleFilter}
+                      onChange={(e) => setUserRoleFilter(e.target.value as UserRole | 'all')}
+                      className="w-full pl-10 pr-4 py-3 bg-white border border-zinc-200 rounded-2xl focus:outline-none focus:ring-2 focus:ring-zinc-900 transition-all text-sm appearance-none"
+                    >
+                      <option value="all">All Roles</option>
+                      {Object.values(UserRole).map(role => (
+                        <option key={role} value={role}>{role.charAt(0).toUpperCase() + role.slice(1)}s</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              )}
               {view === 'applications' && (
                 <>
                   <div className="flex gap-4 col-span-2">
@@ -4012,15 +4496,49 @@ const AdminDashboard = () => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-zinc-50">
+                {filteredInvites.map((invite) => (
+                  <tr key={invite.id} className="bg-zinc-50/30">
+                    <td className="px-8 py-6">
+                      <div className="flex items-center gap-2">
+                        <div className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
+                        <span className="font-bold text-zinc-400 italic">Pending Invite</span>
+                      </div>
+                    </td>
+                    <td className="px-8 py-6 text-zinc-600">
+                      {invite.email}
+                    </td>
+                    <td className="px-8 py-6">
+                      <div className="text-xs font-bold text-zinc-400 uppercase tracking-wider px-2 py-1 bg-zinc-100 rounded-md inline-block">
+                        {invite.role}
+                      </div>
+                    </td>
+                    <td className="px-8 py-6 text-sm text-zinc-400">
+                      {invite.createdAt?.toDate ? format(invite.createdAt.toDate(), 'dd MMM yyyy') : '...'}
+                    </td>
+                    <td className="px-8 py-6 text-right">
+                      <button 
+                        onClick={() => handleDeleteInvite(invite.id)}
+                        className="p-2 text-zinc-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                        title="Cancel Invite"
+                      >
+                        <Trash2 className="w-5 h-5" />
+                      </button>
+                    </td>
+                  </tr>
+                ))}
                 {filteredUsers.map((u) => (
-                  <tr key={u.uid} className="hover:bg-zinc-50/50 transition-colors">
+                  <tr 
+                    key={u.uid} 
+                    className="hover:bg-zinc-50/50 transition-colors cursor-pointer"
+                    onClick={() => setSelectedAdminUser(u)}
+                  >
                     <td className="px-8 py-6">
                       <div className="font-bold text-zinc-900">{u.displayName || 'Anonymous'}</div>
                     </td>
                     <td className="px-8 py-6 text-zinc-600">
                       {u.email}
                     </td>
-                    <td className="px-8 py-6">
+                    <td className="px-8 py-6" onClick={(e) => e.stopPropagation()}>
                       <select 
                         value={u.role}
                         onChange={(e) => handleUpdateUserRole(u.uid, e.target.value as UserRole)}
@@ -4034,7 +4552,7 @@ const AdminDashboard = () => {
                     <td className="px-8 py-6 text-sm text-zinc-500">
                       {u.createdAt?.toDate ? format(u.createdAt.toDate(), 'dd MMM yyyy') : '...'}
                     </td>
-                    <td className="px-8 py-6 text-right">
+                    <td className="px-8 py-6 text-right" onClick={(e) => e.stopPropagation()}>
                       <button 
                         onClick={() => setConfirmDelete({ type: 'user', id: u.uid })}
                         className="p-2 text-zinc-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
@@ -4048,6 +4566,192 @@ const AdminDashboard = () => {
             </table>
           </div>
         )}
+
+        {/* Admin User Details Modal */}
+        <AnimatePresence>
+          {selectedAdminUser && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-6">
+              <motion.div 
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                onClick={() => setSelectedAdminUser(null)}
+                className="absolute inset-0 bg-zinc-900/40 backdrop-blur-sm"
+              />
+              <motion.div 
+                initial={{ opacity: 0, scale: 0.95, y: 20 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.95, y: 20 }}
+                className="relative bg-white w-full max-w-2xl max-h-[90vh] rounded-[2.5rem] shadow-2xl overflow-hidden flex flex-col"
+              >
+                <div className="p-10 overflow-y-auto">
+                  <div className="flex justify-between items-start mb-8">
+                    <div className="flex items-center gap-4">
+                      <div className="w-16 h-16 rounded-2xl bg-zinc-100 flex items-center justify-center text-2xl font-bold text-zinc-900">
+                        {selectedAdminUser.displayName?.[0] || selectedAdminUser.email[0].toUpperCase()}
+                      </div>
+                      <div>
+                        <h3 className="text-2xl font-bold text-zinc-900">{selectedAdminUser.displayName || 'Anonymous User'}</h3>
+                        <p className="text-zinc-500">{selectedAdminUser.email}</p>
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <div className="px-3 py-1 bg-zinc-100 rounded-full text-xs font-bold text-zinc-600 uppercase tracking-widest">
+                        {selectedAdminUser.role}
+                      </div>
+                      <div className="text-[10px] text-zinc-400 mt-2 font-medium">
+                        Joined {selectedAdminUser.createdAt?.toDate ? format(selectedAdminUser.createdAt.toDate(), 'dd MMM yyyy') : 'N/A'}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Tabs */}
+                  <div className="flex gap-8 border-b border-zinc-100 mb-8">
+                    <button 
+                      onClick={() => setUserModalTab('overview')}
+                      className={cn(
+                        "pb-4 text-sm font-bold uppercase tracking-wider transition-all relative",
+                        userModalTab === 'overview' ? "text-zinc-900" : "text-zinc-400 hover:text-zinc-600"
+                      )}
+                    >
+                      Overview
+                      {userModalTab === 'overview' && (
+                        <motion.div layoutId="userTab" className="absolute bottom-0 left-0 right-0 h-0.5 bg-zinc-900" />
+                      )}
+                    </button>
+                    <button 
+                      onClick={() => setUserModalTab('permissions')}
+                      className={cn(
+                        "pb-4 text-sm font-bold uppercase tracking-wider transition-all relative",
+                        userModalTab === 'permissions' ? "text-zinc-900" : "text-zinc-400 hover:text-zinc-600"
+                      )}
+                    >
+                      Permissions
+                      {userModalTab === 'permissions' && (
+                        <motion.div layoutId="userTab" className="absolute bottom-0 left-0 right-0 h-0.5 bg-zinc-900" />
+                      )}
+                    </button>
+                  </div>
+
+                  {userModalTab === 'overview' ? (
+                    <>
+                      <div className="grid grid-cols-2 gap-6 mb-10">
+                        <div className="p-6 bg-zinc-50 rounded-2xl border border-zinc-100">
+                          <div className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-2">Total Applications</div>
+                          <div className="text-2xl font-bold text-zinc-900">
+                            {applications.filter(a => a.borrowerId === selectedAdminUser.uid || a.brokerId === selectedAdminUser.uid).length}
+                          </div>
+                        </div>
+                        <div className="p-6 bg-zinc-50 rounded-2xl border border-zinc-100">
+                          <div className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-2">User ID</div>
+                          <div className="text-xs font-mono text-zinc-500 break-all">{selectedAdminUser.uid}</div>
+                        </div>
+                      </div>
+
+                      <div className="space-y-6">
+                        <h4 className="text-sm font-bold text-zinc-900 uppercase tracking-wider flex items-center gap-2">
+                          <Activity className="w-4 h-4" />
+                          Recent Activity
+                        </h4>
+                        <div className="space-y-4">
+                          {applications
+                            .filter(a => a.borrowerId === selectedAdminUser.uid || a.brokerId === selectedAdminUser.uid)
+                            .slice(0, 5)
+                            .map(app => (
+                              <div key={app.id} className="flex items-center justify-between p-4 bg-white border border-zinc-100 rounded-xl hover:border-zinc-200 transition-all">
+                                <div className="flex items-center gap-3">
+                                  <div className={cn(
+                                    "w-2 h-2 rounded-full",
+                                    app.status === ApplicationStatus.APPROVED ? "bg-emerald-500" :
+                                    app.status === ApplicationStatus.REJECTED ? "bg-red-500" : "bg-amber-500"
+                                  )} />
+                                  <div>
+                                    <div className="text-sm font-bold text-zinc-900">${app.amount.toLocaleString()} - {app.purpose}</div>
+                                    <div className="text-[10px] text-zinc-400 font-medium">
+                                      {app.createdAt?.toDate ? format(app.createdAt.toDate(), 'dd MMM yyyy') : 'N/A'}
+                                    </div>
+                                  </div>
+                                </div>
+                                <div className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">
+                                  {app.status}
+                                </div>
+                              </div>
+                            ))}
+                          {applications.filter(a => a.borrowerId === selectedAdminUser.uid || a.brokerId === selectedAdminUser.uid).length === 0 && (
+                            <div className="text-center py-8 text-zinc-400 text-sm italic">
+                              No applications found for this user.
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="space-y-6">
+                      <div className="p-6 bg-amber-50 rounded-2xl border border-amber-100 mb-8">
+                        <div className="flex gap-3">
+                          <Shield className="w-5 h-5 text-amber-600 shrink-0" />
+                          <div>
+                            <div className="text-sm font-bold text-amber-900 mb-1">Advanced Permissions</div>
+                            <div className="text-xs text-amber-700 leading-relaxed">
+                              These permissions override default role-based access. Use with caution as they grant sensitive capabilities.
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="space-y-4">
+                        {[
+                          { key: 'canApproveLoans', label: 'Approve Loans', desc: 'Allow user to approve or reject loan applications.' },
+                          { key: 'canViewAllApplications', label: 'View All Applications', desc: 'Grant access to view all applications in the system.' },
+                          { key: 'canManageUsers', label: 'Manage Users', desc: 'Allow user to change roles and permissions of others.' },
+                          { key: 'canEditApplications', label: 'Edit Applications', desc: 'Allow user to modify application details after submission.' },
+                        ].map((perm) => (
+                          <div key={perm.key} className="flex items-center justify-between p-6 bg-zinc-50 rounded-2xl border border-zinc-100">
+                            <div>
+                              <div className="text-sm font-bold text-zinc-900 mb-1">{perm.label}</div>
+                              <div className="text-xs text-zinc-500">{perm.desc}</div>
+                            </div>
+                            <button 
+                              onClick={() => handleUpdateUserPermissions(selectedAdminUser.uid, { [perm.key]: !selectedAdminUser.permissions?.[perm.key as keyof UserPermissions] })}
+                              className={cn(
+                                "w-12 h-6 rounded-full transition-all relative",
+                                selectedAdminUser.permissions?.[perm.key as keyof UserPermissions] ? "bg-zinc-900" : "bg-zinc-200"
+                              )}
+                            >
+                              <div className={cn(
+                                "absolute top-1 w-4 h-4 bg-white rounded-full transition-all",
+                                selectedAdminUser.permissions?.[perm.key as keyof UserPermissions] ? "left-7" : "left-1"
+                              )} />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="mt-10 pt-8 border-t border-zinc-100 flex justify-end gap-4">
+                    <button 
+                      onClick={() => setSelectedAdminUser(null)}
+                      className="px-6 py-3 text-zinc-500 font-bold hover:text-zinc-900 transition-all"
+                    >
+                      Close
+                    </button>
+                    <button 
+                      onClick={() => {
+                        setConfirmDelete({ type: 'user', id: selectedAdminUser.uid });
+                        setSelectedAdminUser(null);
+                      }}
+                      className="px-6 py-3 bg-red-50 text-red-600 rounded-xl font-bold hover:bg-red-100 transition-all flex items-center gap-2"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                      Delete User
+                    </button>
+                  </div>
+                </div>
+              </motion.div>
+            </div>
+          )}
+        </AnimatePresence>
 
         {/* Admin Application Details Modal */}
         <AnimatePresence>
@@ -4070,7 +4774,15 @@ const AdminDashboard = () => {
                   <div className="flex justify-between items-start mb-8">
                     <div>
                       <h3 className="text-3xl font-bold text-zinc-900 mb-1">Application Details</h3>
-                      <p className="text-zinc-500">Borrower: {selectedAdminApp.borrowerName}</p>
+                      <p className="text-zinc-500">
+                        Borrower: {selectedAdminApp.borrowerName}
+                        {selectedAdminApp.brokerEmail && (
+                          <span className="ml-2 inline-flex items-center gap-1 text-xs bg-zinc-100 px-2 py-0.5 rounded-full text-zinc-600 font-medium">
+                            <Briefcase className="w-3 h-3" />
+                            Broker: {selectedAdminApp.brokerEmail}
+                          </span>
+                        )}
+                      </p>
                     </div>
                     <div className="text-right">
                       <div className="text-3xl font-bold text-zinc-900">${selectedAdminApp.amount.toLocaleString()}</div>
@@ -4440,6 +5152,81 @@ const AdminDashboard = () => {
           )}
         </AnimatePresence>
 
+        {/* Invite User Modal */}
+        <AnimatePresence>
+          {showInviteModal && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-6">
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                onClick={() => setShowInviteModal(false)}
+                className="absolute inset-0 bg-zinc-900/60 backdrop-blur-sm"
+              />
+              <motion.div
+                initial={{ opacity: 0, scale: 0.95, y: 20 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.95, y: 20 }}
+                className="relative w-full max-w-md bg-white rounded-[2.5rem] shadow-2xl overflow-hidden"
+              >
+                <div className="p-8 border-b border-zinc-100 flex justify-between items-center bg-zinc-50/50">
+                  <div>
+                    <h3 className="text-2xl font-bold text-zinc-900">Invite New User</h3>
+                    <p className="text-sm text-zinc-500">Send an invitation to join LendFlow.</p>
+                  </div>
+                  <button 
+                    onClick={() => setShowInviteModal(false)}
+                    className="p-2 hover:bg-zinc-200 rounded-full transition-colors"
+                  >
+                    <X className="w-6 h-6" />
+                  </button>
+                </div>
+
+                <div className="p-8 space-y-6">
+                  <div className="space-y-2">
+                    <label className="text-xs font-bold text-zinc-400 uppercase tracking-wider">Email Address</label>
+                    <input
+                      type="email"
+                      value={inviteEmail}
+                      onChange={(e) => setInviteEmail(e.target.value)}
+                      placeholder="user@example.com"
+                      className="w-full px-6 py-4 bg-zinc-50 border border-zinc-200 rounded-2xl focus:outline-none focus:ring-2 focus:ring-zinc-900 transition-all"
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-xs font-bold text-zinc-400 uppercase tracking-wider">Assign Role</label>
+                    <div className="grid grid-cols-2 gap-3">
+                      {(Object.values(UserRole)).map((role) => (
+                        <button
+                          key={role}
+                          onClick={() => setInviteRole(role)}
+                          className={cn(
+                            "px-4 py-3 rounded-xl text-sm font-bold border transition-all",
+                            inviteRole === role 
+                              ? "bg-zinc-900 border-zinc-900 text-white" 
+                              : "bg-white border-zinc-200 text-zinc-600 hover:border-zinc-300"
+                          )}
+                        >
+                          {role}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={handleInviteUser}
+                    disabled={!inviteEmail}
+                    className="w-full py-4 bg-zinc-900 text-white rounded-2xl font-bold hover:bg-zinc-800 transition-all shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    Send Invitation
+                  </button>
+                </div>
+              </motion.div>
+            </div>
+          )}
+        </AnimatePresence>
+
         {/* Confirmation Modal */}
         <AnimatePresence>
           {confirmDelete && (
@@ -4491,8 +5278,9 @@ const AdminDashboard = () => {
 
 const AppContent = () => {
   const { user, profile, loading, isAuthReady } = useAuth();
+  const { isLoading: brandingLoading } = useBranding();
 
-  if (!isAuthReady || loading) {
+  if (!isAuthReady || loading || brandingLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-zinc-50">
         <motion.div 
@@ -4520,14 +5308,22 @@ const AppContent = () => {
     return <LenderDashboard />;
   }
 
+  if (profile.role === UserRole.BROKER || profile.role === UserRole.BORROWER) {
+    return <BorrowerDashboard />;
+  }
+
   return <BorrowerDashboard />;
 };
+
+import { BrandingProvider, useBranding } from './components/BrandingContext';
 
 export default function App() {
   return (
     <ErrorBoundary>
       <AuthProvider>
-        <AppContent />
+        <BrandingProvider>
+          <AppContent />
+        </BrandingProvider>
       </AuthProvider>
     </ErrorBoundary>
   );

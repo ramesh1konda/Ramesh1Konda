@@ -542,8 +542,33 @@ const SettingsView = () => {
 const LandingPage = () => {
   const { signIn } = useAuth();
   const { config } = useBranding();
+  const [invite, setInvite] = useState<UserInvite | null>(null);
+
+  useEffect(() => {
+    const inviteId = new URLSearchParams(window.location.search).get('inviteId');
+    if (inviteId) {
+      const fetchInvite = async () => {
+        try {
+          const docSnap = await getDoc(doc(db, 'userInvites', inviteId));
+          if (docSnap.exists()) {
+            setInvite(docSnap.data() as UserInvite);
+          }
+        } catch (error) {
+          console.error('Error fetching invite:', error);
+        }
+      };
+      fetchInvite();
+    }
+  }, []);
+
   return (
     <div className="min-h-screen bg-zinc-50 font-sans">
+      {invite && (
+        <div className="bg-zinc-900 text-white py-3 px-6 text-center text-sm font-medium">
+          You've been invited to join as a <span className="font-bold text-emerald-400">{invite.role}</span>. 
+          <button onClick={signIn} className="ml-2 underline hover:text-emerald-300 transition-colors">Sign in to accept</button>
+        </div>
+      )}
       <nav className="max-w-7xl mx-auto px-6 py-8 flex justify-between items-center">
         <div className="flex items-center gap-2">
           <div className="w-10 h-10 bg-zinc-900 rounded-xl flex items-center justify-center" style={{ backgroundColor: config?.primaryColor }}>
@@ -654,8 +679,7 @@ const RoleSelection = () => {
         if (!snapshot.empty) {
           const invite = snapshot.docs[0].data() as UserInvite;
           await handleSelect(invite.role);
-          // Delete the invite after use
-          await deleteDoc(doc(db, 'userInvites', snapshot.docs[0].id));
+          // Redundant: AuthContext.updateProfile will delete the invite
         }
       } catch (error) {
         console.error('Error checking invite:', error);
@@ -4041,12 +4065,52 @@ const AdminDashboard = ({ onSwitchView }: { onSwitchView?: () => void }) => {
   const handleInviteUser = async () => {
     if (!inviteEmail || !user) return;
     try {
-      await addDoc(collection(db, 'userInvites'), {
+      const inviteRef = await addDoc(collection(db, 'userInvites'), {
         email: inviteEmail.toLowerCase().trim(),
         role: inviteRole,
         invitedBy: user.uid,
-        createdAt: serverTimestamp()
+        createdAt: serverTimestamp(),
+        status: 'pending'
       });
+
+      // Send invitation email via server-side API
+      const appUrl = window.location.origin;
+      const inviteLink = `${appUrl}?inviteId=${inviteRef.id}`;
+      
+      try {
+        await fetch('/api/notify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            to: inviteEmail.toLowerCase().trim(),
+            subject: 'Invitation to Join LendFlow Pro',
+            html: `
+              <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 40px; border: 1px solid #e5e5e5; border-radius: 32px; background-color: #ffffff;">
+                <div style="margin-bottom: 32px;">
+                  <div style="width: 48px; height: 48px; background-color: #18181b; border-radius: 12px; display: flex; align-items: center; justify-content: center; color: white; font-weight: bold; font-size: 24px;">L</div>
+                </div>
+                <h1 style="font-size: 28px; font-weight: 800; color: #18181b; margin-bottom: 16px; letter-spacing: -0.02em;">You've been invited!</h1>
+                <p style="font-size: 16px; color: #52525b; line-height: 1.6; margin-bottom: 32px;">
+                  Hello, you have been invited to join <strong>LendFlow Pro</strong> as a <strong>${inviteRole.toUpperCase()}</strong>. 
+                  Click the button below to activate your account and get started.
+                </p>
+                <a href="${inviteLink}" style="display: inline-block; padding: 18px 36px; background-color: #18181b; color: #ffffff; text-decoration: none; border-radius: 16px; font-weight: 700; font-size: 16px; transition: all 0.2s ease;">
+                  Activate Account
+                </a>
+                <div style="margin-top: 48px; padding-top: 32px; border-top: 1px solid #f4f4f5;">
+                  <p style="font-size: 12px; color: #a1a1aa; line-height: 1.5;">
+                    This invitation was sent by ${user.displayName || user.email}. If you didn't expect this, you can safely ignore this email.
+                  </p>
+                </div>
+              </div>
+            `
+          })
+        });
+      } catch (emailError) {
+        console.error('Failed to send invite email:', emailError);
+        // We don't block the UI if email fails, as the invite is already in Firestore
+      }
+
       setInviteEmail('');
       setShowInviteModal(false);
     } catch (error) {

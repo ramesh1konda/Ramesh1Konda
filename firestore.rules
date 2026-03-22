@@ -182,7 +182,8 @@ service cloud.firestore {
     }
 
     match /userInvites/{inviteId} {
-      allow read: if isAuthenticated() && (request.auth.token.email == resource.data.email || canManageUsers());
+      allow get: if true;
+      allow list: if isAuthenticated() && (request.auth.token.email == resource.data.email || canManageUsers());
       allow write: if canManageUsers();
     }
 

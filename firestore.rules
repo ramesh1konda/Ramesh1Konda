@@ -65,7 +65,7 @@ service cloud.firestore {
 
     function isAdmin() {
       return isAuthenticated() && (
-        (request.auth.token.email == "RCKONDA@gmail.com" && request.auth.token.email_verified == true) ||
+        (request.auth.token.email.lower() == "rckonda@gmail.com" && request.auth.token.email_verified == true) ||
         (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin')
       );
     }
@@ -115,12 +115,13 @@ service cloud.firestore {
     // ===============================================================
     // Domain Validators
     // ===============================================================
-    function isValidUser(data) {
-      return hasOnlyAllowedFields(['uid', 'email', 'displayName', 'role', 'createdAt', 'notificationPreferences', 'permissions']) &&
-             data.uid == request.auth.uid &&
+    function isValidUser(data, userId) {
+      return hasOnlyAllowedFields(['uid', 'email', 'displayName', 'role', 'createdAt', 'notificationPreferences', 'permissions', 'status']) &&
+             data.uid == userId &&
              isValidEmail(data.email) &&
              data.role in ['borrower', 'lender', 'admin', 'broker'] &&
              data.createdAt is timestamp &&
+             (!('status' in data) || (data.status in ['active', 'disabled'])) &&
              (!('notificationPreferences' in data) || (
                data.notificationPreferences is map &&
                data.notificationPreferences.keys().hasOnly(['emailFrequency', 'applicationUpdates', 'newProposals', 'marketingEmails']) &&
@@ -170,8 +171,8 @@ service cloud.firestore {
     // ===============================================================
     match /users/{userId} {
       allow read: if isAuthenticated();
-      allow create: if isOwner(userId) && isValidUser(request.resource.data);
-      allow update: if (isOwner(userId) && isValidUser(request.resource.data) && request.resource.data.role == resource.data.role && !('permissions' in request.resource.data)) || canManageUsers();
+      allow create: if isOwner(userId) && isValidUser(request.resource.data, userId);
+      allow update: if (isOwner(userId) && isValidUser(request.resource.data, userId) && request.resource.data.role == resource.data.role && !('permissions' in request.resource.data) && request.resource.data.status == resource.data.status) || (canManageUsers() && isValidUser(request.resource.data, userId));
       allow delete: if canManageUsers();
     }
 

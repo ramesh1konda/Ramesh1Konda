@@ -42,6 +42,8 @@ import {
   Baby,
   User,
   UserPlus,
+  UserCheck,
+  UserX,
   Edit2,
   Edit3,
   CreditCard,
@@ -52,7 +54,8 @@ import {
   Shield,
   X,
   Home,
-  Car
+  Car,
+  ArrowRightLeft
 } from 'lucide-react';
 import { format, startOfDay, subDays, isSameDay } from 'date-fns';
 import { clsx, type ClassValue } from 'clsx';
@@ -873,7 +876,7 @@ const getPurposeIcon = (purpose: string) => {
   return <FileText className="w-4 h-4" />;
 };
 
-const BorrowerDashboard = () => {
+const BorrowerDashboard = ({ onSwitchView }: { onSwitchView?: () => void }) => {
   const { user, profile, signOut } = useAuth();
   const { config } = useBranding();
   const isBroker = profile?.role === UserRole.BROKER;
@@ -1508,6 +1511,15 @@ const BorrowerDashboard = () => {
             <Settings className="w-5 h-5" />
             Settings
           </button>
+          {onSwitchView && (
+            <button 
+              onClick={onSwitchView}
+              className="w-full flex items-center gap-3 px-4 py-3 text-zinc-500 hover:text-zinc-900 hover:bg-zinc-50 rounded-xl transition-all"
+            >
+              <ArrowRightLeft className="w-5 h-5" />
+              Admin Dashboard
+            </button>
+          )}
         </nav>
 
         <div className="pt-8 border-t border-zinc-100">
@@ -3047,8 +3059,8 @@ const LenderAnalytics = ({ applications }: { applications: LoanApplication[] }) 
   );
 };
 
-const LenderDashboard = () => {
-  const { user, signOut } = useAuth();
+const LenderDashboard = ({ onSwitchView }: { onSwitchView?: () => void }) => {
+  const { user, profile, signOut } = useAuth();
   const [applications, setApplications] = useState<LoanApplication[]>([]);
   const [view, setView] = useState<'queue' | 'analytics' | 'settings'>('queue');
   const [filter, setFilter] = useState<ApplicationStatus | 'all'>('all');
@@ -3215,6 +3227,15 @@ const LenderDashboard = () => {
             <Settings className="w-5 h-5" />
             Settings
           </button>
+          {onSwitchView && (
+            <button 
+              onClick={onSwitchView}
+              className="w-full flex items-center gap-3 px-4 py-3 text-zinc-500 hover:text-zinc-900 hover:bg-zinc-50 rounded-xl transition-all"
+            >
+              <ArrowRightLeft className="w-5 h-5" />
+              Admin Dashboard
+            </button>
+          )}
         </nav>
 
         <div className="pt-8 border-t border-zinc-100">
@@ -3862,8 +3883,8 @@ const LenderDashboard = () => {
   );
 };
 
-const AdminDashboard = () => {
-  const { user, signOut } = useAuth();
+const AdminDashboard = ({ onSwitchView }: { onSwitchView?: () => void }) => {
+  const { user, profile, signOut } = useAuth();
   const [applications, setApplications] = useState<LoanApplication[]>([]);
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [invites, setInvites] = useState<UserInvite[]>([]);
@@ -3899,14 +3920,13 @@ const AdminDashboard = () => {
   };
   const [adminLenderNotes, setAdminLenderNotes] = useState('');
   const [adminInternalNotes, setAdminInternalNotes] = useState('');
-  const { profile } = useAuth();
 
   useEffect(() => {
     const ensureAdminProfile = async () => {
-      if (user?.email === 'RCKONDA@gmail.com' && !profile) {
+      if (user?.email?.toLowerCase() === 'rckonda@gmail.com' && profile?.role !== UserRole.ADMIN) {
         try {
           const profileDoc = await getDoc(doc(db, 'users', user.uid));
-          if (!profileDoc.exists()) {
+          if (!profileDoc.exists() || profileDoc.data()?.role !== UserRole.ADMIN) {
             await setDoc(doc(db, 'users', user.uid), {
               uid: user.uid,
               email: user.email,
@@ -3919,7 +3939,7 @@ const AdminDashboard = () => {
                 canManageUsers: true,
                 canEditApplications: true,
               }
-            });
+            }, { merge: true });
           }
         } catch (error) {
           console.error('Error ensuring admin profile:', error);
@@ -4006,6 +4026,15 @@ const AdminDashboard = () => {
       await updateDoc(doc(db, 'users', uid), { role: newRole });
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, `users/${uid}`);
+    }
+  };
+
+  const handleToggleUserStatus = async (uid: string, currentStatus?: 'active' | 'disabled') => {
+    try {
+      const newStatus = currentStatus === 'disabled' ? 'active' : 'disabled';
+      await updateDoc(doc(db, 'users', uid), { status: newStatus });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `users/${uid}/status`);
     }
   };
 
@@ -4222,6 +4251,15 @@ const AdminDashboard = () => {
             <Settings className="w-5 h-5" />
             Settings
           </button>
+          {onSwitchView && (
+            <button 
+              onClick={onSwitchView}
+              className="w-full flex items-center gap-3 px-4 py-3 text-zinc-500 hover:text-zinc-900 hover:bg-zinc-50 rounded-xl transition-all"
+            >
+              <ArrowRightLeft className="w-5 h-5" />
+              User Dashboard
+            </button>
+          )}
         </nav>
 
         <div className="pt-8 border-t border-zinc-100">
@@ -4567,6 +4605,7 @@ const AdminDashboard = () => {
                   <th className="px-8 py-6 text-xs font-bold text-zinc-400 uppercase tracking-wider">User</th>
                   <th className="px-8 py-6 text-xs font-bold text-zinc-400 uppercase tracking-wider">Email</th>
                   <th className="px-8 py-6 text-xs font-bold text-zinc-400 uppercase tracking-wider">Role</th>
+                  <th className="px-8 py-6 text-xs font-bold text-zinc-400 uppercase tracking-wider">Status</th>
                   <th className="px-8 py-6 text-xs font-bold text-zinc-400 uppercase tracking-wider">Joined</th>
                   <th className="px-8 py-6 text-xs font-bold text-zinc-400 uppercase tracking-wider text-right">Actions</th>
                 </tr>
@@ -4586,6 +4625,11 @@ const AdminDashboard = () => {
                     <td className="px-8 py-6">
                       <div className="text-xs font-bold text-zinc-400 uppercase tracking-wider px-2 py-1 bg-zinc-100 rounded-md inline-block">
                         {invite.role}
+                      </div>
+                    </td>
+                    <td className="px-8 py-6">
+                      <div className="text-xs font-bold text-amber-600 uppercase tracking-wider px-2 py-1 bg-amber-50 rounded-md inline-block">
+                        Pending
                       </div>
                     </td>
                     <td className="px-8 py-6 text-sm text-zinc-400">
@@ -4625,16 +4669,37 @@ const AdminDashboard = () => {
                         ))}
                       </select>
                     </td>
+                    <td className="px-8 py-6" onClick={(e) => e.stopPropagation()}>
+                      <div className={cn(
+                        "text-[10px] font-bold uppercase tracking-widest px-2 py-1 rounded-md inline-block",
+                        u.status === 'disabled' ? "bg-red-100 text-red-700" : "bg-emerald-100 text-emerald-700"
+                      )}>
+                        {u.status || 'active'}
+                      </div>
+                    </td>
                     <td className="px-8 py-6 text-sm text-zinc-500">
                       {u.createdAt?.toDate ? format(u.createdAt.toDate(), 'dd MMM yyyy') : '...'}
                     </td>
                     <td className="px-8 py-6 text-right" onClick={(e) => e.stopPropagation()}>
-                      <button 
-                        onClick={() => setConfirmDelete({ type: 'user', id: u.uid })}
-                        className="p-2 text-zinc-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                      >
-                        <XCircle className="w-5 h-5" />
-                      </button>
+                      <div className="flex justify-end gap-2">
+                        <button 
+                          onClick={() => handleToggleUserStatus(u.uid, u.status)}
+                          className={cn(
+                            "p-2 rounded-lg transition-colors",
+                            u.status === 'disabled' ? "text-emerald-600 hover:bg-emerald-50" : "text-amber-600 hover:bg-amber-50"
+                          )}
+                          title={u.status === 'disabled' ? "Enable User" : "Disable User"}
+                        >
+                          {u.status === 'disabled' ? <UserCheck className="w-5 h-5" /> : <UserX className="w-5 h-5" />}
+                        </button>
+                        <button 
+                          onClick={() => setConfirmDelete({ type: 'user', id: u.uid })}
+                          className="p-2 text-zinc-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                          title="Delete User"
+                        >
+                          <Trash2 className="w-5 h-5" />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -4669,6 +4734,20 @@ const AdminDashboard = () => {
                       <div>
                         <h3 className="text-2xl font-bold text-zinc-900">{selectedAdminUser.displayName || 'Anonymous User'}</h3>
                         <p className="text-zinc-500">{selectedAdminUser.email}</p>
+                        <div className="flex items-center gap-2 mt-2">
+                          <div className={cn(
+                            "px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-widest",
+                            selectedAdminUser.status === 'disabled' ? "bg-red-100 text-red-700" : "bg-emerald-100 text-emerald-700"
+                          )}>
+                            {selectedAdminUser.status || 'active'}
+                          </div>
+                          <button 
+                            onClick={() => handleToggleUserStatus(selectedAdminUser.uid, selectedAdminUser.status)}
+                            className="text-[10px] font-bold text-zinc-500 hover:text-zinc-900 underline underline-offset-2"
+                          >
+                            {selectedAdminUser.status === 'disabled' ? 'Enable Account' : 'Disable Account'}
+                          </button>
+                        </div>
                       </div>
                     </div>
                     <div className="text-right">
@@ -5355,6 +5434,7 @@ const AdminDashboard = () => {
 const AppContent = () => {
   const { user, profile, loading, isAuthReady } = useAuth();
   const { isLoading: brandingLoading } = useBranding();
+  const [adminViewMode, setAdminViewMode] = useState<'admin' | 'user'>('admin');
 
   if (!isAuthReady || loading || brandingLoading) {
     return (
@@ -5368,27 +5448,53 @@ const AppContent = () => {
     );
   }
 
+  if (user && profile?.status === 'disabled') {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-zinc-50 p-6">
+        <motion.div 
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="max-w-md w-full bg-white rounded-[2.5rem] shadow-2xl p-12 text-center border border-zinc-200"
+        >
+          <div className="w-20 h-20 bg-red-50 text-red-600 rounded-full flex items-center justify-center mx-auto mb-8">
+            <UserX className="w-10 h-10" />
+          </div>
+          <h1 className="text-3xl font-bold text-zinc-900 mb-4 tracking-tight">Account Disabled</h1>
+          <p className="text-zinc-500 mb-10 leading-relaxed">
+            Your account has been disabled by an administrator. Please contact support if you believe this is an error.
+          </p>
+          <button 
+            onClick={() => auth.signOut()}
+            className="w-full py-4 bg-zinc-900 text-white rounded-2xl font-bold hover:bg-zinc-800 transition-all shadow-lg shadow-zinc-200"
+          >
+            Sign Out
+          </button>
+        </motion.div>
+      </div>
+    );
+  }
+
   if (!user) {
     return <LandingPage />;
   }
 
-  if (!profile) {
+  // Super admin bypasses role selection to ensure profile creation in AdminDashboard
+  const isSuperAdmin = user.email?.toLowerCase() === 'rckonda@gmail.com';
+  const isAdmin = profile?.role === UserRole.ADMIN || isSuperAdmin;
+
+  if (!profile && !isSuperAdmin) {
     return <RoleSelection />;
   }
 
-  if (profile?.role === UserRole.ADMIN || user.email === 'RCKONDA@gmail.com') {
-    return <AdminDashboard />;
+  if (isAdmin && adminViewMode === 'admin') {
+    return <AdminDashboard onSwitchView={() => setAdminViewMode('user')} />;
   }
 
-  if (profile.role === UserRole.LENDER) {
-    return <LenderDashboard />;
+  if (profile?.role === UserRole.LENDER) {
+    return <LenderDashboard onSwitchView={isAdmin ? () => setAdminViewMode('admin') : undefined} />;
   }
 
-  if (profile.role === UserRole.BROKER || profile.role === UserRole.BORROWER) {
-    return <BorrowerDashboard />;
-  }
-
-  return <BorrowerDashboard />;
+  return <BorrowerDashboard onSwitchView={isAdmin ? () => setAdminViewMode('admin') : undefined} />;
 };
 
 import { BrandingProvider, useBranding } from './components/BrandingContext';

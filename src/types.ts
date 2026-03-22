@@ -29,6 +29,7 @@ export interface UserProfile {
   createdAt: Timestamp;
   notificationPreferences?: NotificationPreferences;
   permissions?: UserPermissions;
+  status?: 'active' | 'disabled';
 }
 
 export enum ApplicationStatus {

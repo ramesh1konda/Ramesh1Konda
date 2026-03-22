@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { onAuthStateChanged, User } from 'firebase/auth';
-import { doc, getDoc, setDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
+import { doc, getDoc, setDoc, updateDoc, serverTimestamp, query, collection, where, getDocs, deleteDoc } from 'firebase/firestore';
 import { auth, db } from '../firebase';
 import { UserProfile, UserRole, OperationType, NotificationPreferences } from '../types';
 import { handleFirestoreError } from '../utils/firestore';
@@ -60,12 +60,27 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const updateProfile = async (role: UserRole) => {
     if (!user) return;
+
+    let finalRole = role;
+    try {
+      const inviteQuery = query(collection(db, 'userInvites'), where('email', '==', user.email?.toLowerCase()));
+      const inviteSnap = await getDocs(inviteQuery);
+      if (!inviteSnap.empty) {
+        const inviteData = inviteSnap.docs[0].data();
+        finalRole = inviteData.role;
+        await deleteDoc(doc(db, 'userInvites', inviteSnap.docs[0].id));
+      }
+    } catch (e) {
+      console.error("Error checking invites:", e);
+    }
+
     const newProfile: UserProfile = {
       uid: user.uid,
       email: user.email || '',
       displayName: user.displayName || '',
-      role,
+      role: finalRole,
       createdAt: serverTimestamp() as any,
+      status: 'active'
     };
     try {
       await setDoc(doc(db, 'users', user.uid), newProfile);

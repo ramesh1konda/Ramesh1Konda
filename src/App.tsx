@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, Component } from 'react';
 import { AuthProvider, useAuth } from './components/AuthContext';
 import { UserRole, ApplicationStatus, LoanApplication, OperationType, UserProfile, LoanDocument, Asset, Liability, Applicant, NotificationPreferences, UserPermissions, WhiteLabelConfig, UserInvite } from './types';
 import { db, auth, storage } from './firebase';
-import { collection, addDoc, query, where, onSnapshot, serverTimestamp, doc, updateDoc, deleteDoc, getDocs, deleteField, Timestamp, setDoc } from 'firebase/firestore';
+import { collection, addDoc, query, where, onSnapshot, serverTimestamp, doc, updateDoc, deleteDoc, getDocs, deleteField, Timestamp, setDoc, getDoc } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { handleFirestoreError } from './utils/firestore';
 import { motion, AnimatePresence } from 'motion/react';
@@ -50,7 +50,9 @@ import {
   ArrowUpWideNarrow,
   Settings,
   Shield,
-  X
+  X,
+  Home,
+  Car
 } from 'lucide-react';
 import { format, startOfDay, subDays, isSameDay } from 'date-fns';
 import { clsx, type ClassValue } from 'clsx';
@@ -142,6 +144,7 @@ const LoanCalculator = () => {
   const [amount, setAmount] = useState(50000);
   const [rate, setRate] = useState(8.5);
   const [term, setTerm] = useState(60);
+  const [repaymentType, setRepaymentType] = useState<'PI' | 'IO'>('PI');
   const [monthlyPayment, setMonthlyPayment] = useState(0);
 
   useEffect(() => {
@@ -151,19 +154,43 @@ const LoanCalculator = () => {
     
     if (r === 0) {
       setMonthlyPayment(p / n);
+    } else if (repaymentType === 'IO') {
+      setMonthlyPayment(p * r);
     } else {
       const payment = (p * r * Math.pow(1 + r, n)) / (Math.pow(1 + r, n) - 1);
       setMonthlyPayment(payment);
     }
-  }, [amount, rate, term]);
+  }, [amount, rate, term, repaymentType]);
 
   return (
     <div className="bg-white p-8 rounded-[2.5rem] border border-zinc-200 shadow-sm">
-      <div className="flex items-center gap-3 mb-6">
-        <div className="w-10 h-10 bg-zinc-100 rounded-2xl flex items-center justify-center">
-          <Calculator className="w-5 h-5 text-zinc-900" />
+      <div className="flex items-center justify-between mb-8">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 bg-zinc-100 rounded-2xl flex items-center justify-center">
+            <Calculator className="w-5 h-5 text-zinc-900" />
+          </div>
+          <h3 className="text-xl font-bold text-zinc-900">Loan Calculator</h3>
         </div>
-        <h3 className="text-xl font-bold text-zinc-900">Loan Calculator</h3>
+        <div className="flex bg-zinc-100 p-1 rounded-xl">
+          <button
+            onClick={() => setRepaymentType('PI')}
+            className={cn(
+              "px-4 py-2 rounded-lg text-xs font-bold transition-all",
+              repaymentType === 'PI' ? "bg-white text-zinc-900 shadow-sm" : "text-zinc-500 hover:text-zinc-700"
+            )}
+          >
+            P&I
+          </button>
+          <button
+            onClick={() => setRepaymentType('IO')}
+            className={cn(
+              "px-4 py-2 rounded-lg text-xs font-bold transition-all",
+              repaymentType === 'IO' ? "bg-white text-zinc-900 shadow-sm" : "text-zinc-500 hover:text-zinc-700"
+            )}
+          >
+            Interest Only
+          </button>
+        </div>
       </div>
 
       <div className="space-y-6">
@@ -834,6 +861,16 @@ const ErrorMessage = ({ message }: { message?: string }) => {
       {message}
     </motion.p>
   );
+};
+
+const getPurposeIcon = (purpose: string) => {
+  const p = purpose.toLowerCase();
+  if (p.includes('mortgage') || p.includes('home') || p.includes('house') || p.includes('property')) return <Home className="w-4 h-4" />;
+  if (p.includes('car') || p.includes('auto') || p.includes('vehicle')) return <Car className="w-4 h-4" />;
+  if (p.includes('business') || p.includes('company') || p.includes('startup')) return <Briefcase className="w-4 h-4" />;
+  if (p.includes('personal') || p.includes('debt') || p.includes('consolidation')) return <Wallet className="w-4 h-4" />;
+  if (p.includes('education') || p.includes('student') || p.includes('school')) return <Building2 className="w-4 h-4" />;
+  return <FileText className="w-4 h-4" />;
 };
 
 const BorrowerDashboard = () => {
@@ -1644,7 +1681,8 @@ const BorrowerDashboard = () => {
                            <Clock className="w-7 h-7" />}
                         </div>
                         <div>
-                          <div className="text-sm font-bold text-zinc-400 uppercase tracking-wider mb-1">
+                          <div className="text-sm font-bold text-zinc-400 uppercase tracking-wider mb-1 flex items-center gap-2">
+                            {getPurposeIcon(app.purpose)}
                             {app.purpose}
                           </div>
                           <div className="text-2xl font-bold text-zinc-900">
@@ -3281,7 +3319,10 @@ const LenderDashboard = () => {
                     <tr key={app.id} onClick={() => setSelectedApp(app)} className="hover:bg-zinc-50/50 transition-colors group cursor-pointer">
                       <td className="px-8 py-6">
                         <div className="font-bold text-zinc-900">{app.borrowerName}</div>
-                        <div className="text-xs text-zinc-500">{app.purpose}</div>
+                        <div className="text-xs text-zinc-500 flex items-center gap-1.5">
+                          {getPurposeIcon(app.purpose)}
+                          {app.purpose}
+                        </div>
                       </td>
                       <td className="px-8 py-6 font-bold text-zinc-900">
                         ${app.amount.toLocaleString()}
@@ -3858,6 +3899,35 @@ const AdminDashboard = () => {
   };
   const [adminLenderNotes, setAdminLenderNotes] = useState('');
   const [adminInternalNotes, setAdminInternalNotes] = useState('');
+  const { profile } = useAuth();
+
+  useEffect(() => {
+    const ensureAdminProfile = async () => {
+      if (user?.email === 'RCKONDA@gmail.com' && !profile) {
+        try {
+          const profileDoc = await getDoc(doc(db, 'users', user.uid));
+          if (!profileDoc.exists()) {
+            await setDoc(doc(db, 'users', user.uid), {
+              uid: user.uid,
+              email: user.email,
+              displayName: user.displayName || 'Admin',
+              role: UserRole.ADMIN,
+              createdAt: serverTimestamp(),
+              permissions: {
+                canApproveLoans: true,
+                canViewAllApplications: true,
+                canManageUsers: true,
+                canEditApplications: true,
+              }
+            });
+          }
+        } catch (error) {
+          console.error('Error ensuring admin profile:', error);
+        }
+      }
+    };
+    ensureAdminProfile();
+  }, [user, profile]);
 
   useEffect(() => {
     if (selectedAdminApp) {
@@ -4342,7 +4412,10 @@ const AdminDashboard = () => {
                         </div>
                         <div>
                           <div className="font-bold text-zinc-900">{app.borrowerName}</div>
-                          <div className="text-xs text-zinc-500">{app.purpose}</div>
+                          <div className="text-xs text-zinc-500 flex items-center gap-1.5">
+                            {getPurposeIcon(app.purpose)}
+                            {app.purpose}
+                          </div>
                         </div>
                       </div>
                       <div className="text-right">
@@ -4407,7 +4480,10 @@ const AdminDashboard = () => {
                   <tr key={app.id} onClick={() => setSelectedAdminApp(app)} className="hover:bg-zinc-50/50 transition-colors cursor-pointer">
                     <td className="px-8 py-6">
                       <div className="font-bold text-zinc-900">{app.borrowerName}</div>
-                      <div className="text-xs text-zinc-500">{app.purpose}</div>
+                      <div className="text-xs text-zinc-500 flex items-center gap-1.5">
+                        {getPurposeIcon(app.purpose)}
+                        {app.purpose}
+                      </div>
                     </td>
                     <td className="px-8 py-6 font-bold text-zinc-900">
                       ${app.amount.toLocaleString()}

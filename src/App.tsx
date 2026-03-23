@@ -3088,6 +3088,9 @@ const LenderDashboard = ({ onSwitchView }: { onSwitchView?: () => void }) => {
   const [applications, setApplications] = useState<LoanApplication[]>([]);
   const [view, setView] = useState<'queue' | 'analytics' | 'settings'>('queue');
   const [filter, setFilter] = useState<ApplicationStatus | 'all'>('all');
+  const [assignmentFilter, setAssignmentFilter] = useState<'assigned' | 'all' | 'unassigned'>('assigned');
+  const [sortBy, setSortBy] = useState<'date' | 'amount' | 'name' | 'creditScore'>('date');
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
   const [searchQuery, setSearchQuery] = useState('');
   const [minAmount, setMinAmount] = useState('');
   const [maxAmount, setMaxAmount] = useState('');
@@ -3201,13 +3204,49 @@ const LenderDashboard = ({ onSwitchView }: { onSwitchView?: () => void }) => {
     }
   };
 
+  const handleClaimApplication = async () => {
+    if (!selectedApp || !user) return;
+    try {
+      await updateDoc(doc(db, 'applications', selectedApp.id), {
+        lenderId: user.uid,
+        lenderEmail: user.email,
+        updatedAt: serverTimestamp(),
+      });
+      setSelectedApp({ ...selectedApp, lenderId: user.uid, lenderEmail: user.email || undefined });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `applications/${selectedApp.id}`);
+    }
+  };
+
   const filteredApps = applications.filter(app => {
     const matchesStatus = filter === 'all' || app.status === filter;
     const matchesSearch = (app.borrowerName || '').toLowerCase().includes(searchQuery.toLowerCase()) || 
                          (app.purpose || '').toLowerCase().includes(searchQuery.toLowerCase());
     const matchesMin = minAmount === '' || app.amount >= Number(minAmount);
     const matchesMax = maxAmount === '' || app.amount <= Number(maxAmount);
-    return matchesStatus && matchesSearch && matchesMin && matchesMax;
+    
+    const matchesAssignment = 
+      assignmentFilter === 'all' ? true :
+      assignmentFilter === 'assigned' ? app.lenderId === user?.uid :
+      assignmentFilter === 'unassigned' ? !app.lenderId : true;
+
+    return matchesStatus && matchesSearch && matchesMin && matchesMax && matchesAssignment;
+  });
+
+  const sortedApps = [...filteredApps].sort((a, b) => {
+    let comparison = 0;
+    if (sortBy === 'date') {
+      const t1 = a.createdAt?.toMillis?.() || 0;
+      const t2 = b.createdAt?.toMillis?.() || 0;
+      comparison = t2 - t1;
+    } else if (sortBy === 'amount') {
+      comparison = b.amount - a.amount;
+    } else if (sortBy === 'name') {
+      comparison = (a.borrowerName || '').localeCompare(b.borrowerName || '');
+    } else if (sortBy === 'creditScore') {
+      comparison = (b.creditScore || 0) - (a.creditScore || 0);
+    }
+    return sortOrder === 'desc' ? comparison : -comparison;
   });
 
   return (
@@ -3293,7 +3332,35 @@ const LenderDashboard = ({ onSwitchView }: { onSwitchView?: () => void }) => {
               <div className="flex justify-between items-end">
                 <div>
                   <h2 className="text-4xl font-bold tracking-tight text-zinc-900 mb-2">Review Queue</h2>
-                  <p className="text-zinc-500">Analyze risk and manage loan originations.</p>
+                  <div className="flex items-center gap-4 mt-2">
+                    <button 
+                      onClick={() => setAssignmentFilter('assigned')}
+                      className={cn(
+                        "text-sm font-bold transition-all",
+                        assignmentFilter === 'assigned' ? "text-zinc-900 underline underline-offset-8" : "text-zinc-400 hover:text-zinc-600"
+                      )}
+                    >
+                      Assigned to Me
+                    </button>
+                    <button 
+                      onClick={() => setAssignmentFilter('unassigned')}
+                      className={cn(
+                        "text-sm font-bold transition-all",
+                        assignmentFilter === 'unassigned' ? "text-zinc-900 underline underline-offset-8" : "text-zinc-400 hover:text-zinc-600"
+                      )}
+                    >
+                      Available
+                    </button>
+                    <button 
+                      onClick={() => setAssignmentFilter('all')}
+                      className={cn(
+                        "text-sm font-bold transition-all",
+                        assignmentFilter === 'all' ? "text-zinc-900 underline underline-offset-8" : "text-zinc-400 hover:text-zinc-600"
+                      )}
+                    >
+                      All Applications
+                    </button>
+                  </div>
                 </div>
                 <div className="flex items-center gap-4 bg-white p-1.5 rounded-2xl border border-zinc-200 shadow-sm">
                   {(['all', 'pending', 'reviewing', 'proposed', 'approved', 'rejected'] as const).map((s) => (
@@ -3344,6 +3411,26 @@ const LenderDashboard = ({ onSwitchView }: { onSwitchView?: () => void }) => {
                     />
                   </div>
                 </div>
+                <div className="bg-white border border-zinc-200 rounded-2xl px-4 py-3 flex items-center gap-3">
+                  <Filter className="w-4 h-4 text-zinc-400" />
+                  <select 
+                    value={sortBy}
+                    onChange={(e) => setSortBy(e.target.value as any)}
+                    className="bg-transparent text-sm font-bold text-zinc-900 focus:outline-none cursor-pointer"
+                  >
+                    <option value="date">Sort by Date</option>
+                    <option value="amount">Sort by Amount</option>
+                    <option value="name">Sort by Name</option>
+                    <option value="creditScore">Sort by Credit Score</option>
+                  </select>
+                  <button 
+                    onClick={() => setSortOrder(prev => prev === 'asc' ? 'desc' : 'asc')}
+                    className="p-1 hover:bg-zinc-100 rounded-md transition-all text-zinc-600"
+                    title={sortOrder === 'desc' ? 'Descending' : 'Ascending'}
+                  >
+                    {sortOrder === 'desc' ? <ArrowDownWideNarrow className="w-4 h-4" /> : <ArrowUpWideNarrow className="w-4 h-4" />}
+                  </button>
+                </div>
               </div>
             </header>
 
@@ -3355,12 +3442,13 @@ const LenderDashboard = ({ onSwitchView }: { onSwitchView?: () => void }) => {
                     <th className="px-8 py-6 text-xs font-bold text-zinc-400 uppercase tracking-wider">Amount</th>
                     <th className="px-8 py-6 text-xs font-bold text-zinc-400 uppercase tracking-wider">Credit</th>
                     <th className="px-8 py-6 text-xs font-bold text-zinc-400 uppercase tracking-wider">Status</th>
+                    <th className="px-8 py-6 text-xs font-bold text-zinc-400 uppercase tracking-wider">Lender</th>
                     <th className="px-8 py-6 text-xs font-bold text-zinc-400 uppercase tracking-wider">Date</th>
                     <th className="px-8 py-6 text-xs font-bold text-zinc-400 uppercase tracking-wider text-right">Action</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-zinc-50">
-                  {filteredApps.map((app) => (
+                  {sortedApps.map((app) => (
                     <tr key={app.id} onClick={() => setSelectedApp(app)} className="hover:bg-zinc-50/50 transition-colors group cursor-pointer">
                       <td className="px-8 py-6">
                         <div className="font-bold text-zinc-900">{app.borrowerName}</div>
@@ -3391,6 +3479,19 @@ const LenderDashboard = ({ onSwitchView }: { onSwitchView?: () => void }) => {
                           {app.status}
                         </div>
                       </td>
+                      <td className="px-8 py-6">
+                        {app.lenderId ? (
+                          <div className={cn(
+                            "text-xs font-bold flex items-center gap-1.5",
+                            app.lenderId === user?.uid ? "text-emerald-600" : "text-zinc-500"
+                          )}>
+                            <ShieldCheck className="w-3.5 h-3.5" />
+                            {app.lenderId === user?.uid ? 'You' : (app.lenderEmail?.split('@')[0] || 'Assigned')}
+                          </div>
+                        ) : (
+                          <div className="text-xs text-zinc-400 italic">Unassigned</div>
+                        )}
+                      </td>
                       <td className="px-8 py-6 text-sm text-zinc-500">
                         {app.createdAt?.toDate ? format(app.createdAt.toDate(), 'MMM d') : '...'}
                       </td>
@@ -3406,7 +3507,7 @@ const LenderDashboard = ({ onSwitchView }: { onSwitchView?: () => void }) => {
                   ))}
                 </tbody>
               </table>
-              {filteredApps.length === 0 && (
+              {sortedApps.length === 0 && (
                 <div className="p-20 text-center text-zinc-400">
                   No applications found matching your filter.
                 </div>
@@ -3457,6 +3558,24 @@ const LenderDashboard = ({ onSwitchView }: { onSwitchView?: () => void }) => {
                     <div className="text-right">
                       <div className="text-3xl font-bold text-zinc-900">${selectedApp.amount.toLocaleString()}</div>
                       <div className="text-sm font-bold text-zinc-400 uppercase tracking-wider">{selectedApp.purpose}</div>
+                      {!selectedApp.lenderId && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleClaimApplication();
+                          }}
+                          className="mt-2 flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-xl text-xs font-bold hover:bg-emerald-700 transition-all shadow-sm"
+                        >
+                          <UserPlus className="w-3 h-3" />
+                          Claim Application
+                        </button>
+                      )}
+                      {selectedApp.lenderId === user?.uid && (
+                        <div className="mt-2 text-xs font-bold text-emerald-600 flex items-center justify-end gap-1">
+                          <ShieldCheck className="w-3 h-3" />
+                          Assigned to You
+                        </div>
+                      )}
                     </div>
                   </div>
 
@@ -4172,6 +4291,22 @@ const AdminDashboard = ({ onSwitchView }: { onSwitchView?: () => void }) => {
       });
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, `applications/${selectedAdminApp.id}`);
+    }
+  };
+
+  const handleAssignLender = async (applicationId: string, lenderId: string) => {
+    try {
+      const lender = users.find(u => u.uid === lenderId);
+      await updateDoc(doc(db, 'applications', applicationId), {
+        lenderId,
+        lenderEmail: lender?.email || '',
+        updatedAt: serverTimestamp(),
+      });
+      if (selectedAdminApp) {
+        setSelectedAdminApp({ ...selectedAdminApp, lenderId, lenderEmail: lender?.email });
+      }
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `applications/${applicationId}`);
     }
   };
 
@@ -5006,6 +5141,19 @@ const AdminDashboard = ({ onSwitchView }: { onSwitchView?: () => void }) => {
                     <div className="text-right">
                       <div className="text-3xl font-bold text-zinc-900">${selectedAdminApp.amount.toLocaleString()}</div>
                       <div className="text-sm font-bold text-zinc-400 uppercase tracking-wider">{selectedAdminApp.purpose}</div>
+                      <div className="mt-4 flex flex-col items-end gap-2">
+                        <div className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider">Assigned Lender</div>
+                        <select
+                          value={selectedAdminApp.lenderId || ''}
+                          onChange={(e) => handleAssignLender(selectedAdminApp.id, e.target.value)}
+                          className="text-xs font-bold bg-zinc-50 border border-zinc-200 rounded-xl px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-zinc-900 transition-all"
+                        >
+                          <option value="">Unassigned</option>
+                          {users.filter(u => u.role === UserRole.LENDER).map(lender => (
+                            <option key={lender.uid} value={lender.uid}>{lender.displayName || lender.email}</option>
+                          ))}
+                        </select>
+                      </div>
                     </div>
                   </div>
 

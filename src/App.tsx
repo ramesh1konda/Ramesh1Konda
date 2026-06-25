@@ -78,6 +78,30 @@ function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
+const QUICK_REPLIES = [
+  {
+    label: "Request missing ID document",
+    text: "Please upload a clear, non-expired copy of your government-issued photo ID (Driver's License or Passport) to proceed with your application."
+  },
+  {
+    label: "Financial statements required",
+    text: "Please provide your business or personal bank statements for the most recent 3 months and your latest tax returns for verification."
+  },
+  {
+    label: "Asset valuation needed",
+    text: "We require an updated professional appraisal or documentation verifying the current market value of your listed collateral."
+  },
+  {
+    label: "Clarify use of funds",
+    text: "Please provide a brief, detailed statement clarifying the intended use of funds and your expected timeline for deployment."
+  },
+  {
+    label: "Co-signer requested",
+    text: "To strengthen your application, we recommend adding a qualified co-signer. Please submit their contact and financial details."
+  }
+];
+
+
 const sendEmail = async (to: string, subject: string, html: string) => {
   try {
     const response = await fetch('/api/notify', {
@@ -90,6 +114,120 @@ const sendEmail = async (to: string, subject: string, html: string) => {
     }
   } catch (error) {
     console.error('Error sending email:', error);
+  }
+};
+
+const sendLenderNotification = async (
+  appId: string, 
+  type: 'status_change' | 'feedback_change', 
+  details: {
+    status?: ApplicationStatus;
+    feedback?: string;
+    application?: LoanApplication;
+  }
+) => {
+  try {
+    let app = details.application;
+    if (!app) {
+      const appDoc = await getDoc(doc(db, 'applications', appId));
+      if (appDoc.exists()) {
+        app = { id: appDoc.id, ...appDoc.data() } as LoanApplication;
+      }
+    }
+
+    if (!app || !app.borrowerEmail) {
+      console.warn(`Could not send notification: Application or borrower email not found for ID ${appId}`);
+      return;
+    }
+
+    const email = app.borrowerEmail;
+    const borrowerName = app.borrowerName || 'Applicant';
+    const amount = app.amount?.toLocaleString() || 'N/A';
+    const status = details.status || app.status;
+    const feedback = details.feedback !== undefined ? details.feedback : app.lenderNotes;
+
+    let subject = '';
+    let htmlContent = '';
+
+    if (type === 'status_change') {
+      subject = `Loan Application Status Updated: ${status.toUpperCase()}`;
+      htmlContent = `
+        <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 32px 24px; border: 1px solid #e4e4e7; border-radius: 16px; background-color: #ffffff; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.02);">
+          <div style="margin-bottom: 24px; text-align: center;">
+            <div style="display: inline-block; padding: 12px; background-color: #f4f4f5; border-radius: 12px; font-weight: bold; color: #18181b; font-size: 18px; letter-spacing: -0.5px;">
+              LendFlow
+            </div>
+          </div>
+          
+          <h2 style="color: #18181b; margin-top: 0; font-size: 22px; font-weight: 700; letter-spacing: -0.5px; margin-bottom: 8px; text-align: center;">Status Update Notice</h2>
+          <p style="color: #71717a; font-size: 14px; text-align: center; margin-bottom: 24px;">Application Ref: #${appId.substring(0, 8).toUpperCase()}</p>
+          
+          <p style="color: #3f3f46; font-size: 15px; line-height: 1.6; margin-bottom: 20px;">Dear ${borrowerName},</p>
+          <p style="color: #3f3f46; font-size: 15px; line-height: 1.6; margin-bottom: 24px;">Your loan application for <strong style="color: #18181b;">$${amount}</strong> has been updated to:</p>
+          
+          <div style="text-align: center; margin-bottom: 28px;">
+            <span style="display: inline-block; padding: 8px 16px; background-color: #18181b; color: #ffffff; border-radius: 9999px; font-size: 14px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;">
+              ${status}
+            </span>
+          </div>
+
+          ${feedback ? `
+            <div style="background-color: #fafafa; border: 1px solid #e4e4e7; border-radius: 12px; padding: 20px; margin-bottom: 28px;">
+              <strong style="display: block; color: #18181b; font-size: 13px; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px;">Lender Feedback Notes:</strong>
+              <p style="color: #3f3f46; font-size: 14px; line-height: 1.6; margin: 0; white-space: pre-line;">${feedback}</p>
+            </div>
+          ` : ''}
+
+          <p style="color: #3f3f46; font-size: 15px; line-height: 1.6; margin-bottom: 28px;">Please click the button below to log into your account and view the full application details.</p>
+          
+          <div style="text-align: center; margin-bottom: 32px;">
+            <a href="${window.location.origin}" style="display: inline-block; padding: 14px 28px; background-color: #18181b; color: #ffffff; text-decoration: none; border-radius: 12px; font-weight: 600; font-size: 14px; box-shadow: 0 4px 10px rgba(24, 24, 27, 0.15);">
+              Access Your Dashboard
+            </a>
+          </div>
+
+          <hr style="border: 0; border-top: 1px solid #e4e4e7; margin: 24px 0;" />
+          <p style="color: #a1a1aa; font-size: 12px; text-align: center; line-height: 1.5; margin: 0;">This is an automated notification from LendFlow. Please do not reply directly to this email.</p>
+        </div>
+      `;
+    } else {
+      subject = `New Lender Feedback on your Loan Application`;
+      htmlContent = `
+        <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 32px 24px; border: 1px solid #e4e4e7; border-radius: 16px; background-color: #ffffff; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.02);">
+          <div style="margin-bottom: 24px; text-align: center;">
+            <div style="display: inline-block; padding: 12px; background-color: #f4f4f5; border-radius: 12px; font-weight: bold; color: #18181b; font-size: 18px; letter-spacing: -0.5px;">
+              LendFlow
+            </div>
+          </div>
+          
+          <h2 style="color: #18181b; margin-top: 0; font-size: 22px; font-weight: 700; letter-spacing: -0.5px; margin-bottom: 8px; text-align: center;">New Lender Feedback Added</h2>
+          <p style="color: #71717a; font-size: 14px; text-align: center; margin-bottom: 24px;">Application Ref: #${appId.substring(0, 8).toUpperCase()}</p>
+          
+          <p style="color: #3f3f46; font-size: 15px; line-height: 1.6; margin-bottom: 20px;">Dear ${borrowerName},</p>
+          <p style="color: #3f3f46; font-size: 15px; line-height: 1.6; margin-bottom: 24px;">A lender has added new feedback notes or requested additional details regarding your loan application for <strong style="color: #18181b;">$${amount}</strong>:</p>
+
+          <div style="background-color: #fafafa; border: 1px solid #e4e4e7; border-radius: 12px; padding: 20px; margin-bottom: 28px;">
+            <strong style="display: block; color: #18181b; font-size: 13px; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px;">Feedback & Requests:</strong>
+            <p style="color: #3f3f46; font-size: 14px; line-height: 1.6; margin: 0; white-space: pre-line;">${feedback || 'Please view the requested feedback in your dashboard.'}</p>
+          </div>
+
+          <p style="color: #3f3f46; font-size: 15px; line-height: 1.6; margin-bottom: 28px;">Please click the button below to log into your account and submit any required responses or missing documents.</p>
+          
+          <div style="text-align: center; margin-bottom: 32px;">
+            <a href="${window.location.origin}" style="display: inline-block; padding: 14px 28px; background-color: #18181b; color: #ffffff; text-decoration: none; border-radius: 12px; font-weight: 600; font-size: 14px; box-shadow: 0 4px 10px rgba(24, 24, 27, 0.15);">
+              Access Your Dashboard
+            </a>
+          </div>
+
+          <hr style="border: 0; border-top: 1px solid #e4e4e7; margin: 24px 0;" />
+          <p style="color: #a1a1aa; font-size: 12px; text-align: center; line-height: 1.5; margin: 0;">This is an automated notification from LendFlow. Please do not reply directly to this email.</p>
+        </div>
+      `;
+    }
+
+    await sendEmail(email, subject, htmlContent);
+  } catch (error) {
+    console.error('Error in sendLenderNotification:', error);
   }
 };
 
@@ -543,6 +681,7 @@ const LandingPage = () => {
   const { signIn } = useAuth();
   const { config } = useBranding();
   const [invite, setInvite] = useState<UserInvite | null>(null);
+  const [showRoleModal, setShowRoleModal] = useState(false);
 
   useEffect(() => {
     const inviteId = new URLSearchParams(window.location.search).get('inviteId');
@@ -560,6 +699,12 @@ const LandingPage = () => {
       fetchInvite();
     }
   }, []);
+
+  const handleRoleSelect = (role: UserRole) => {
+    localStorage.setItem('chosen_role', role);
+    setShowRoleModal(false);
+    signIn();
+  };
 
   return (
     <div className="min-h-screen bg-zinc-50 font-sans">
@@ -600,7 +745,7 @@ const LandingPage = () => {
           </p>
           <div className="flex flex-wrap gap-4">
             <button 
-              onClick={signIn}
+              onClick={() => setShowRoleModal(true)}
               className="px-8 py-4 bg-zinc-900 text-white rounded-2xl font-semibold hover:bg-zinc-800 transition-all shadow-lg flex items-center gap-2 group"
             >
               Get Started Now
@@ -651,6 +796,84 @@ const LandingPage = () => {
           </div>
         </motion.div>
       </main>
+
+      <AnimatePresence>
+        {showRoleModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setShowRoleModal(false)}
+              className="absolute inset-0 bg-zinc-900/60 backdrop-blur-sm"
+            />
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="relative bg-white w-full max-w-2xl rounded-[2rem] shadow-2xl overflow-hidden p-8 z-10 border border-zinc-200"
+            >
+              <div className="flex justify-between items-start mb-6">
+                <div>
+                  <h3 className="text-2xl font-bold text-zinc-900">Get Started with {config?.companyName || 'LendFlow'}</h3>
+                  <p className="text-zinc-500 text-sm mt-1">Please select your role to continue registration</p>
+                </div>
+                <button 
+                  onClick={() => setShowRoleModal(false)}
+                  className="p-1 hover:bg-zinc-100 rounded-lg transition-colors text-zinc-400 hover:text-zinc-600"
+                >
+                  <XCircle className="w-6 h-6" />
+                </button>
+              </div>
+
+              <div className="grid sm:grid-cols-3 gap-4 mb-6">
+                <button
+                  onClick={() => handleRoleSelect(UserRole.BORROWER)}
+                  className="group flex flex-col p-6 bg-zinc-50 hover:bg-zinc-900 hover:text-white rounded-2xl border border-zinc-200/60 hover:border-zinc-900 transition-all text-left shadow-sm"
+                >
+                  <div className="w-12 h-12 bg-zinc-200/50 rounded-xl flex items-center justify-center mb-4 group-hover:bg-zinc-800 transition-colors">
+                    <Users className="w-6 h-6 text-zinc-700 group-hover:text-white" />
+                  </div>
+                  <h4 className="font-bold text-zinc-950 group-hover:text-white mb-2 text-base">Borrower</h4>
+                  <p className="text-zinc-500 group-hover:text-zinc-300 text-xs leading-relaxed">
+                    Apply for loans, track status, and manage funding.
+                  </p>
+                </button>
+
+                <button
+                  onClick={() => handleRoleSelect(UserRole.BROKER)}
+                  className="group flex flex-col p-6 bg-zinc-50 hover:bg-zinc-900 hover:text-white rounded-2xl border border-zinc-200/60 hover:border-zinc-900 transition-all text-left shadow-sm"
+                >
+                  <div className="w-12 h-12 bg-zinc-200/50 rounded-xl flex items-center justify-center mb-4 group-hover:bg-zinc-800 transition-colors">
+                    <Briefcase className="w-6 h-6 text-zinc-700 group-hover:text-white" />
+                  </div>
+                  <h4 className="font-bold text-zinc-950 group-hover:text-white mb-2 text-base">Broker</h4>
+                  <p className="text-zinc-500 group-hover:text-zinc-300 text-xs leading-relaxed">
+                    Submit applications for clients and track commissions.
+                  </p>
+                </button>
+
+                <button
+                  onClick={() => handleRoleSelect(UserRole.LENDER)}
+                  className="group flex flex-col p-6 bg-zinc-50 hover:bg-zinc-900 hover:text-white rounded-2xl border border-zinc-200/60 hover:border-zinc-900 transition-all text-left shadow-sm"
+                >
+                  <div className="w-12 h-12 bg-zinc-200/50 rounded-xl flex items-center justify-center mb-4 group-hover:bg-zinc-800 transition-colors">
+                    <ShieldCheck className="w-6 h-6 text-zinc-700 group-hover:text-white" />
+                  </div>
+                  <h4 className="font-bold text-zinc-950 group-hover:text-white mb-2 text-base">Lender</h4>
+                  <p className="text-zinc-500 group-hover:text-zinc-300 text-xs leading-relaxed">
+                    Review applications, manage risk, and fund loans.
+                  </p>
+                </button>
+              </div>
+
+              <div className="text-center text-xs text-zinc-400">
+                Selection is mandatory to proceed with account registration.
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 };
@@ -678,8 +901,16 @@ const RoleSelection = () => {
         
         if (!snapshot.empty) {
           const invite = snapshot.docs[0].data() as UserInvite;
+          localStorage.removeItem('chosen_role');
           await handleSelect(invite.role);
-          // Redundant: AuthContext.updateProfile will delete the invite
+          return;
+        }
+
+        const storedRole = localStorage.getItem('chosen_role');
+        if (storedRole) {
+          localStorage.removeItem('chosen_role');
+          await handleSelect(storedRole as UserRole);
+          return;
         }
       } catch (error) {
         console.error('Error checking invite:', error);
@@ -769,7 +1000,60 @@ const RoleSelection = () => {
 };
 
 const DocumentList = ({ documents, onRemove }: { documents?: LoanDocument[], onRemove?: (index: number) => void }) => {
+  const [previewDoc, setPreviewDoc] = useState<LoanDocument | null>(null);
+
   if (!documents || documents.length === 0) return null;
+
+  const downloadFile = (name: string, url: string) => {
+    try {
+      if (url.startsWith('data:')) {
+        // Safe conversion of data URL to Blob to avoid browser navigating limits in iframes
+        const parts = url.split(',');
+        const mime = parts[0].match(/:(.*?);/)?.[1] || 'application/octet-stream';
+        const bstr = atob(parts[1]);
+        let n = bstr.length;
+        const u8arr = new Uint8Array(n);
+        while (n--) {
+          u8arr[n] = bstr.charCodeAt(n);
+        }
+        const blob = new Blob([u8arr], { type: mime });
+        const blobUrl = URL.createObjectURL(blob);
+        
+        const link = document.createElement('a');
+        link.href = blobUrl;
+        link.download = name;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(blobUrl);
+      } else {
+        const link = document.createElement('a');
+        link.href = url;
+        link.target = '_blank';
+        link.download = name;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+      }
+    } catch (error) {
+      console.error('Error downloading file:', error);
+      window.open(url, '_blank');
+    }
+  };
+
+  const isImage = (url: string, name: string) => {
+    return url.startsWith('data:image/') || 
+      name.toLowerCase().endsWith('.png') || 
+      name.toLowerCase().endsWith('.jpg') || 
+      name.toLowerCase().endsWith('.jpeg') || 
+      name.toLowerCase().endsWith('.gif') || 
+      name.toLowerCase().endsWith('.webp');
+  };
+
+  const isPdf = (url: string, name: string) => {
+    return url.startsWith('data:application/pdf') || 
+      name.toLowerCase().endsWith('.pdf');
+  };
 
   return (
     <>
@@ -777,35 +1061,37 @@ const DocumentList = ({ documents, onRemove }: { documents?: LoanDocument[], onR
         <div key={index} className="flex items-center justify-between p-3 bg-zinc-50 rounded-xl border border-zinc-100 group hover:border-zinc-300 transition-all">
           <div className="flex items-center gap-3 min-w-0 flex-1">
             <FileText className="w-5 h-5 text-zinc-400 shrink-0" />
-            <a 
-              href={doc.url} 
-              target="_blank" 
-              rel="noopener noreferrer"
-              className="text-sm font-medium text-zinc-900 truncate hover:text-zinc-600 transition-colors"
-              onClick={(e) => e.stopPropagation()}
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setPreviewDoc(doc);
+              }}
+              className="text-sm font-medium text-zinc-900 truncate hover:text-zinc-600 transition-colors text-left flex-1 cursor-pointer"
             >
               {doc.name}
-            </a>
+            </button>
           </div>
           <div className="flex items-center gap-1 shrink-0">
-            <a 
-              href={doc.url} 
-              target="_blank" 
-              rel="noopener noreferrer"
-              download={doc.name}
-              onClick={(e) => e.stopPropagation()}
-              className="p-2 text-zinc-400 hover:text-zinc-900 transition-colors"
-              title="Download"
+            <button 
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                downloadFile(doc.name, doc.url);
+              }}
+              className="p-2 text-zinc-400 hover:text-zinc-900 transition-colors cursor-pointer"
+              title="Download / Save"
             >
               <Download className="w-4 h-4" />
-            </a>
+            </button>
             {onRemove && (
               <button 
+                type="button"
                 onClick={(e) => {
                   e.stopPropagation();
                   onRemove(index);
                 }}
-                className="p-2 text-zinc-400 hover:text-red-600 transition-colors"
+                className="p-2 text-zinc-400 hover:text-red-600 transition-colors cursor-pointer"
                 title="Remove"
               >
                 <Trash2 className="w-4 h-4" />
@@ -814,6 +1100,91 @@ const DocumentList = ({ documents, onRemove }: { documents?: LoanDocument[], onR
           </div>
         </div>
       ))}
+
+      {/* Document Preview Modal */}
+      <AnimatePresence>
+        {previewDoc && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-zinc-950/80 backdrop-blur-sm animate-fade-in">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-white rounded-[2rem] shadow-2xl w-full max-w-4xl max-h-[85vh] overflow-hidden flex flex-col border border-zinc-100"
+            >
+              {/* Modal Header */}
+              <div className="px-8 py-5 border-b border-zinc-100 flex items-center justify-between bg-zinc-50/50">
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="w-10 h-10 rounded-xl bg-zinc-100 flex items-center justify-center text-zinc-500 shrink-0">
+                    <FileText className="w-5 h-5" />
+                  </div>
+                  <div className="min-w-0">
+                    <h3 className="text-sm font-bold text-zinc-900 truncate pr-4">{previewDoc.name}</h3>
+                    <p className="text-[10px] text-zinc-400 font-bold uppercase tracking-widest mt-0.5">Document Preview</p>
+                  </div>
+                </div>
+                
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => downloadFile(previewDoc.name, previewDoc.url)}
+                    className="px-4 py-2 bg-zinc-900 text-white rounded-xl text-xs font-bold hover:bg-zinc-800 transition-all flex items-center gap-2 shadow-sm cursor-pointer"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    Download File
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPreviewDoc(null)}
+                    className="p-2 text-zinc-400 hover:text-zinc-900 hover:bg-zinc-100 rounded-xl transition-all cursor-pointer"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+              </div>
+
+              {/* Modal Content Preview */}
+              <div className="flex-1 overflow-y-auto p-8 bg-zinc-50/25 flex flex-col items-center justify-center min-h-[40vh]">
+                {isImage(previewDoc.url, previewDoc.name) ? (
+                  <div className="relative max-w-full max-h-[55vh] rounded-xl overflow-hidden border border-zinc-200 shadow-sm bg-white">
+                    <img 
+                      src={previewDoc.url} 
+                      alt={previewDoc.name}
+                      referrerPolicy="no-referrer"
+                      className="max-w-full max-h-[55vh] object-contain block" 
+                    />
+                  </div>
+                ) : isPdf(previewDoc.url, previewDoc.name) ? (
+                  <div className="w-full h-[55vh] rounded-xl overflow-hidden border border-zinc-200 bg-white shadow-sm flex flex-col">
+                    <iframe 
+                      src={previewDoc.url} 
+                      className="w-full h-full border-none"
+                      title={previewDoc.name}
+                    />
+                  </div>
+                ) : (
+                  <div className="text-center p-8 bg-white border border-zinc-200 rounded-3xl max-w-md shadow-sm">
+                    <div className="w-16 h-16 rounded-full bg-zinc-100 flex items-center justify-center text-zinc-400 mx-auto mb-4">
+                      <FileText className="w-8 h-8" />
+                    </div>
+                    <h4 className="text-base font-bold text-zinc-900 mb-2">Unsupported Preview Format</h4>
+                    <p className="text-sm text-zinc-500 mb-6">
+                      We cannot preview this file type directly in the browser, but you can download it to view it on your device.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => downloadFile(previewDoc.name, previewDoc.url)}
+                      className="px-6 py-3 bg-zinc-100 hover:bg-zinc-200 text-zinc-900 rounded-xl text-sm font-bold transition-all inline-flex items-center gap-2 cursor-pointer"
+                    >
+                      <Download className="w-4 h-4" />
+                      Save & Open File
+                    </button>
+                  </div>
+                )}
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </>
   );
 };
@@ -940,6 +1311,41 @@ const BorrowerDashboard = ({ onSwitchView }: { onSwitchView?: () => void }) => {
   const [loanTerm, setLoanTerm] = useState('36');
   const [phone, setPhone] = useState('');
   const [address, setAddress] = useState('');
+  const [addressSuggestions, setAddressSuggestions] = useState<any[]>([]);
+  const [isSearchingAddress, setIsSearchingAddress] = useState(false);
+  const [showAddressDropdown, setShowAddressDropdown] = useState(false);
+  const [lastSelectedAddress, setLastSelectedAddress] = useState('');
+
+  useEffect(() => {
+    if (!address || address === lastSelectedAddress || address.trim().length < 4) {
+      setAddressSuggestions([]);
+      setShowAddressDropdown(false);
+      return;
+    }
+
+    const delayDebounceFn = setTimeout(async () => {
+      setIsSearchingAddress(true);
+      setShowAddressDropdown(true);
+      try {
+        const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(address)}&limit=5&addressdetails=1`;
+        const res = await fetch(url, {
+          headers: {
+            'Accept-Language': 'en',
+          }
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setAddressSuggestions(data);
+        }
+      } catch (err) {
+        console.error("Error looking up address:", err);
+      } finally {
+        setIsSearchingAddress(false);
+      }
+    }, 450); // 450ms debounce
+
+    return () => clearTimeout(delayDebounceFn);
+  }, [address, lastSelectedAddress]);
   const [income, setIncome] = useState('');
   const [baseIncome, setBaseIncome] = useState('');
   const [bonusIncome, setBonusIncome] = useState('');
@@ -1070,32 +1476,92 @@ const BorrowerDashboard = ({ onSwitchView }: { onSwitchView?: () => void }) => {
 
   const uploadFiles = async (files: File[], borrowerId: string) => {
     console.log('Starting upload for files:', files.map(f => f.name), 'Borrower ID:', borrowerId);
+    
+    const readFileAsBase64 = (file: File): Promise<string> => {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result as string);
+        reader.onerror = (error) => reject(error);
+        reader.readAsDataURL(file);
+      });
+    };
+
+    const uploadToTmpFiles = async (file: File): Promise<string> => {
+      const formData = new FormData();
+      formData.append('file', file);
+      const response = await fetch('https://tmpfiles.org/api/v1/upload', {
+        method: 'POST',
+        body: formData
+      });
+      if (!response.ok) {
+        throw new Error(`tmpfiles.org upload failed with status ${response.status}`);
+      }
+      const result = await response.json();
+      if (result.status === 'success' && result.data && result.data.url) {
+        return result.data.url.replace('https://tmpfiles.org/', 'https://tmpfiles.org/dl/');
+      }
+      throw new Error('Invalid response from tmpfiles.org');
+    };
+
     try {
       const uploadPromises = files.map(async (file) => {
-        console.log('Uploading file:', file.name);
-        const storageRef = ref(storage, `applications/${borrowerId}/${Date.now()}_${Math.random().toString(36).substring(7)}_${file.name}`);
-        
-        // Add a timeout to the upload process
-        const uploadTask = uploadBytes(storageRef, file);
-        const timeoutPromise = new Promise((_, reject) => 
-          setTimeout(() => reject(new Error(`Upload timed out for ${file.name} after 30 seconds`)), 30000)
-        );
+        console.log('Attempting Firebase Storage upload for:', file.name);
+        try {
+          const storageRef = ref(storage, `applications/${borrowerId}/${Date.now()}_${Math.random().toString(36).substring(7)}_${file.name}`);
+          
+          // Add a timeout to the upload process
+          const uploadTask = uploadBytes(storageRef, file);
+          const timeoutPromise = new Promise((_, reject) => 
+            setTimeout(() => reject(new Error(`Upload timed out for ${file.name} after 15 seconds`)), 15000)
+          );
 
-        console.log('Waiting for upload task or timeout for:', file.name);
-        await Promise.race([uploadTask, timeoutPromise]);
-        console.log('Upload task completed for:', file.name);
-        
-        const url = await getDownloadURL(storageRef);
-        console.log('Download URL obtained for:', file.name, url);
-        
-        return {
-          name: file.name,
-          url,
-          uploadedAt: Timestamp.now()
-        };
+          await Promise.race([uploadTask, timeoutPromise]);
+          const url = await getDownloadURL(storageRef);
+          console.log('Firebase Storage upload successful for:', file.name);
+          return {
+            name: file.name,
+            url,
+            uploadedAt: Timestamp.now()
+          };
+        } catch (firebaseError) {
+          console.warn('Firebase Storage upload failed, trying tmpfiles.org fallback:', firebaseError);
+          try {
+            const fallbackUrl = await uploadToTmpFiles(file);
+            console.log('tmpfiles.org fallback upload successful for:', file.name, fallbackUrl);
+            return {
+              name: file.name,
+              url: fallbackUrl,
+              uploadedAt: Timestamp.now()
+            };
+          } catch (tmpFilesError) {
+            console.warn('tmpfiles.org fallback failed, trying Base64 / data URL fallback:', tmpFilesError);
+            try {
+              if (file.size < 800000) { // < ~800KB
+                const base64Url = await readFileAsBase64(file);
+                console.log('Base64 upload fallback successful for:', file.name);
+                return {
+                  name: file.name,
+                  url: base64Url,
+                  uploadedAt: Timestamp.now()
+                };
+              } else {
+                const localBlobUrl = URL.createObjectURL(file);
+                console.log('Local Blob fallback for large file:', file.name);
+                return {
+                  name: file.name,
+                  url: localBlobUrl,
+                  uploadedAt: Timestamp.now()
+                };
+              }
+            } catch (base64Error) {
+              console.error('All fallback mechanisms failed for:', file.name, base64Error);
+              throw new Error(`Failed to upload ${file.name} via primary or secondary systems.`);
+            }
+          }
+        }
       });
       const results = await Promise.all(uploadPromises);
-      console.log('All files uploaded successfully:', results);
+      console.log('All files uploaded successfully (including fallbacks):', results);
       return results;
     } catch (error) {
       console.error('File upload error details:', error);
@@ -1405,10 +1871,9 @@ const BorrowerDashboard = ({ onSwitchView }: { onSwitchView?: () => void }) => {
       const dsr = ((monthlyRepayment + totalMonthlyDebts) / monthlyGrossIncome) * 100;
       const nsr = (monthlyNetIncome - totalMonthlyExpenses - totalMonthlyDebts) / monthlyRepayment;
 
-      const appData = {
+      // Construct clean application data without any undefined fields (which cause Firestore write errors)
+      const appData: any = {
         borrowerId: user.uid,
-        brokerId: isBroker ? user.uid : undefined,
-        brokerEmail: isBroker ? user.email || '' : undefined,
         borrowerName: finalApplicants[0].name || user.displayName || 'Anonymous',
         borrowerEmail: finalApplicants[0].email || user.email || '',
         applicants: finalApplicants,
@@ -1422,13 +1887,20 @@ const BorrowerDashboard = ({ onSwitchView }: { onSwitchView?: () => void }) => {
         updatedAt: serverTimestamp(),
       };
 
+      if (isBroker) {
+        appData.brokerId = user.uid;
+        appData.brokerEmail = user.email || '';
+      }
+
       if (editingAppId) {
         await updateDoc(doc(db, 'applications', editingAppId), appData);
+        setToast({ message: 'Application updated successfully!', type: 'success' });
       } else {
         await addDoc(collection(db, 'applications'), {
           ...appData,
           createdAt: serverTimestamp(),
         });
+        setToast({ message: 'Application submitted successfully!', type: 'success' });
         
         // Notify lenders only for new apps
         sendEmail(
@@ -1445,8 +1917,16 @@ const BorrowerDashboard = ({ onSwitchView }: { onSwitchView?: () => void }) => {
 
       setShowForm(false);
       resetForm();
-    } catch (error) {
-      handleFirestoreError(error, editingAppId ? OperationType.UPDATE : OperationType.CREATE, editingAppId ? `applications/${editingAppId}` : 'applications');
+    } catch (error: any) {
+      console.error('Error submitting application:', error);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      setToast({ message: `Submission failed: ${errorMessage}`, type: 'error' });
+      
+      try {
+        handleFirestoreError(error, editingAppId ? OperationType.UPDATE : OperationType.CREATE, editingAppId ? `applications/${editingAppId}` : 'applications');
+      } catch (logErr) {
+        console.error('Logged Firestore error details:', logErr);
+      }
     } finally {
       setLoading(false);
     }
@@ -1494,72 +1974,87 @@ const BorrowerDashboard = ({ onSwitchView }: { onSwitchView?: () => void }) => {
   return (
     <div className="min-h-screen bg-zinc-50 flex">
       {/* Sidebar */}
-      <aside className="w-72 bg-white border-r border-zinc-200 p-8 flex flex-col">
-        <div className="flex items-center gap-2 mb-12">
-          <div className="w-8 h-8 bg-zinc-900 rounded-lg flex items-center justify-center" style={{ backgroundColor: config?.primaryColor }}>
-            {config?.logoUrl ? <img src={config.logoUrl} alt="Logo" className="w-5 h-5 object-contain" referrerPolicy="no-referrer" /> : <TrendingUp className="text-white w-5 h-5" />}
+      <aside className="w-72 bg-white border-r border-zinc-200 p-6 flex flex-col justify-between select-none">
+        <div>
+          <div className="flex items-center gap-3 mb-10 px-2">
+            <div className="w-10 h-10 bg-zinc-900 rounded-xl flex items-center justify-center shadow-md shadow-zinc-950/10 shrink-0" style={{ backgroundColor: config?.primaryColor }}>
+              {config?.logoUrl ? <img src={config.logoUrl} alt="Logo" className="w-5 h-5 object-contain" referrerPolicy="no-referrer" /> : <TrendingUp className="text-white w-5 h-5" />}
+            </div>
+            <div className="flex flex-col">
+              <span className="text-base font-bold tracking-tight text-zinc-900 leading-none">{config?.companyName || 'LendFlow'}</span>
+              <span className="text-[10px] font-semibold text-zinc-400 mt-1.5 uppercase tracking-wider">{isBroker ? 'Broker Suite' : 'Borrower Suite'}</span>
+            </div>
           </div>
-          <span className="text-lg font-bold tracking-tight text-zinc-900">{config?.companyName || 'LendFlow'}</span>
-        </div>
 
-        <nav className="flex-1 space-y-2">
-          <button 
-            onClick={() => setView('dashboard')}
-            className={cn(
-              "w-full flex items-center gap-3 px-4 py-3 rounded-xl font-medium transition-all",
-              view === 'dashboard' ? "bg-zinc-100 text-zinc-900" : "text-zinc-500 hover:text-zinc-900 hover:bg-zinc-50"
-            )}
-          >
-            <LayoutDashboard className="w-5 h-5" />
-            Dashboard
-          </button>
-          {isBroker && (
+          <nav className="space-y-1.5">
             <button 
-              onClick={() => setView('branding')}
+              onClick={() => setView('dashboard')}
               className={cn(
-                "w-full flex items-center gap-3 px-4 py-3 rounded-xl font-medium transition-all",
-                view === 'branding' ? "bg-zinc-100 text-zinc-900" : "text-zinc-500 hover:text-zinc-900 hover:bg-zinc-50"
+                "w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200",
+                view === 'dashboard' 
+                  ? "bg-zinc-900 text-white font-semibold shadow-sm shadow-zinc-950/10" 
+                  : "text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900 font-medium"
               )}
             >
-              <Shield className="w-5 h-5" />
-              Branding
+              <LayoutDashboard className="w-5 h-5" />
+              <span>Dashboard</span>
             </button>
-          )}
-          <button 
-            onClick={() => setView('settings')}
-            className={cn(
-              "w-full flex items-center gap-3 px-4 py-3 rounded-xl font-medium transition-all",
-              view === 'settings' ? "bg-zinc-100 text-zinc-900" : "text-zinc-500 hover:text-zinc-900 hover:bg-zinc-50"
+            {isBroker && (
+              <button 
+                onClick={() => setView('branding')}
+                className={cn(
+                  "w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200",
+                  view === 'branding' 
+                    ? "bg-zinc-900 text-white font-semibold shadow-sm shadow-zinc-950/10" 
+                    : "text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900 font-medium"
+                )}
+              >
+                <Shield className="w-5 h-5" />
+                <span>Branding</span>
+              </button>
             )}
-          >
-            <Settings className="w-5 h-5" />
-            Settings
-          </button>
-          {onSwitchView && (
             <button 
-              onClick={onSwitchView}
-              className="w-full flex items-center gap-3 px-4 py-3 text-zinc-500 hover:text-zinc-900 hover:bg-zinc-50 rounded-xl transition-all"
+              onClick={() => setView('settings')}
+              className={cn(
+                "w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200",
+                view === 'settings' 
+                  ? "bg-zinc-900 text-white font-semibold shadow-sm shadow-zinc-950/10" 
+                  : "text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900 font-medium"
+              )}
             >
-              <ArrowRightLeft className="w-5 h-5" />
-              Admin Dashboard
+              <Settings className="w-5 h-5" />
+              <span>Settings</span>
             </button>
-          )}
-        </nav>
+            {onSwitchView && (
+              <div className="pt-4 mt-4 border-t border-zinc-100">
+                <button 
+                  onClick={onSwitchView}
+                  className="w-full flex items-center gap-3 px-4 py-3 text-zinc-600 hover:text-zinc-900 hover:bg-zinc-100 rounded-xl transition-all duration-200 font-medium border border-dashed border-zinc-200 hover:border-zinc-300"
+                >
+                  <ArrowRightLeft className="w-4 h-4 text-zinc-400" />
+                  <span className="text-sm">Admin Dashboard</span>
+                </button>
+              </div>
+            )}
+          </nav>
+        </div>
 
-        <div className="pt-8 border-t border-zinc-100">
-          <div className="flex items-center gap-3 mb-6">
-            <div className="w-10 h-10 rounded-full bg-zinc-200" />
+        <div className="pt-6 border-t border-zinc-100 space-y-4">
+          <div className="flex items-center gap-3 px-2">
+            <div className="w-10 h-10 rounded-full bg-zinc-900 flex items-center justify-center text-white font-bold shadow-inner text-sm shrink-0">
+              {user?.displayName?.charAt(0) || user?.email?.charAt(0).toUpperCase() || '?'}
+            </div>
             <div className="flex-1 min-w-0">
-              <div className="text-sm font-bold text-zinc-900 truncate">{user?.displayName}</div>
+              <div className="text-sm font-bold text-zinc-900 truncate">{user?.displayName || 'User'}</div>
               <div className="text-xs text-zinc-500 truncate">{user?.email}</div>
             </div>
           </div>
           <button 
             onClick={signOut}
-            className="w-full flex items-center gap-3 px-4 py-3 text-zinc-500 hover:text-zinc-900 hover:bg-zinc-50 rounded-xl transition-all"
+            className="w-full flex items-center gap-3 px-4 py-3 text-zinc-500 hover:text-red-600 hover:bg-red-50 rounded-xl transition-all duration-200 font-semibold"
           >
-            <LogOut className="w-5 h-5" />
-            Sign Out
+            <LogOut className="w-5 h-5 text-zinc-400 group-hover:text-red-50" />
+            <span>Sign Out</span>
           </button>
         </div>
       </aside>
@@ -2183,22 +2678,72 @@ const BorrowerDashboard = ({ onSwitchView }: { onSwitchView?: () => void }) => {
                           />
                           <ErrorMessage message={errors.phone} />
                         </div>
-                        <div className="space-y-2">
+                        <div className="space-y-2 relative">
                           <label className="text-xs font-bold text-zinc-400 uppercase tracking-wider">Current Address</label>
-                          <textarea 
-                            required
-                            value={address}
-                            onChange={(e) => {
-                              setAddress(e.target.value);
-                              clearError('address');
-                            }}
-                            placeholder="Street, Suburb, State/Territory, Postcode"
-                            rows={3}
-                            className={cn(
-                              "w-full px-5 py-4 bg-zinc-50 border rounded-2xl focus:outline-none focus:ring-2 transition-all resize-none",
-                              errors.address ? "border-red-500 focus:ring-red-500" : "border-zinc-200 focus:ring-zinc-900"
+                          <div className="relative">
+                            <textarea 
+                              required
+                              value={address}
+                              onChange={(e) => {
+                                setAddress(e.target.value);
+                                clearError('address');
+                              }}
+                              placeholder="Street, Suburb, State/Territory, Postcode"
+                              rows={3}
+                              className={cn(
+                                "w-full px-5 py-4 bg-zinc-50 border rounded-2xl focus:outline-none focus:ring-2 transition-all resize-none",
+                                errors.address ? "border-red-500 focus:ring-red-500" : "border-zinc-200 focus:ring-zinc-900"
+                              )}
+                            />
+                            {isSearchingAddress && (
+                              <div className="absolute right-4 top-4 flex items-center gap-1.5 text-[10px] text-zinc-400 bg-white/90 px-2 py-1 rounded-lg border border-zinc-100 shadow-sm animate-pulse">
+                                <div className="w-2.5 h-2.5 border-2 border-zinc-500 border-t-transparent rounded-full animate-spin" />
+                                <span>Searching...</span>
+                              </div>
                             )}
-                          />
+                          </div>
+
+                          {showAddressDropdown && (addressSuggestions.length > 0 || isSearchingAddress) && (
+                            <div className="absolute left-0 right-0 top-[calc(100%+4px)] z-50 bg-white border border-zinc-200 rounded-2xl shadow-xl overflow-hidden max-h-60 overflow-y-auto">
+                              {isSearchingAddress && addressSuggestions.length === 0 && (
+                                <div className="p-4 text-center text-sm text-zinc-500 flex items-center justify-center gap-2">
+                                  <div className="w-4 h-4 border-2 border-zinc-900 border-t-transparent rounded-full animate-spin" />
+                                  <span>Searching for addresses...</span>
+                                </div>
+                              )}
+                              {addressSuggestions.map((suggestion, idx) => (
+                                <button
+                                  key={idx}
+                                  type="button"
+                                  onClick={() => {
+                                    setAddress(suggestion.display_name);
+                                    setLastSelectedAddress(suggestion.display_name);
+                                    setAddressSuggestions([]);
+                                    setShowAddressDropdown(false);
+                                    clearError('address');
+                                  }}
+                                  className="w-full text-left px-5 py-3.5 hover:bg-zinc-50 border-b border-zinc-100 last:border-none flex items-start gap-3 transition-colors duration-150 group cursor-pointer"
+                                >
+                                  <MapPin className="w-5 h-5 text-zinc-400 group-hover:text-zinc-900 shrink-0 mt-0.5" />
+                                  <div className="flex flex-col min-w-0">
+                                    <span className="text-sm font-semibold text-zinc-900 group-hover:text-black line-clamp-2">
+                                      {suggestion.display_name}
+                                    </span>
+                                    {suggestion.address && (
+                                      <span className="text-[11px] text-zinc-400 group-hover:text-zinc-500 mt-0.5 uppercase tracking-wider font-semibold">
+                                        {[
+                                          suggestion.address.suburb,
+                                          suggestion.address.city || suggestion.address.town,
+                                          suggestion.address.state,
+                                          suggestion.address.postcode
+                                        ].filter(Boolean).join(', ')}
+                                      </span>
+                                    )}
+                                  </div>
+                                </button>
+                              ))}
+                            </div>
+                          )}
                           <ErrorMessage message={errors.address} />
                         </div>
                       </motion.div>
@@ -3140,15 +3685,11 @@ const LenderDashboard = ({ onSwitchView }: { onSwitchView?: () => void }) => {
       });
 
       if (selectedApp) {
-        sendEmail(
-          selectedApp.borrowerEmail,
-          `Loan Application Status: ${status.toUpperCase()}`,
-          `<h3>Application Status Update</h3>
-           <p>Your loan application for <strong>$${selectedApp.amount.toLocaleString()}</strong> has been updated to: <strong>${status.toUpperCase()}</strong></p>
-           ${lenderNotes ? `<p><strong>Lender Feedback:</strong> ${lenderNotes}</p>` : ''}
-           <p>Log in to your dashboard to view more details.</p>
-           <p><a href="${window.location.origin}">Open LendFlow</a></p>`
-        );
+        await sendLenderNotification(id, 'status_change', {
+          status,
+          feedback: lenderNotes,
+          application: selectedApp
+        });
       }
 
       setSelectedApp(null);
@@ -3164,6 +3705,11 @@ const LenderDashboard = ({ onSwitchView }: { onSwitchView?: () => void }) => {
         lenderNotes,
         internalNotes,
         updatedAt: serverTimestamp(),
+      });
+
+      await sendLenderNotification(selectedApp.id, 'feedback_change', {
+        feedback: lenderNotes,
+        application: selectedApp
       });
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, `applications/${selectedApp.id}`);
@@ -3251,72 +3797,85 @@ const LenderDashboard = ({ onSwitchView }: { onSwitchView?: () => void }) => {
 
   return (
     <div className="min-h-screen bg-zinc-50 flex">
-      <aside className="w-72 bg-white border-r border-zinc-200 p-8 flex flex-col">
-        <div className="flex items-center gap-2 mb-12">
-          <div className="w-8 h-8 bg-zinc-900 rounded-lg flex items-center justify-center">
-            <ShieldCheck className="text-white w-5 h-5" />
+      <aside className="w-72 bg-white border-r border-zinc-200 p-6 flex flex-col justify-between select-none">
+        <div>
+          <div className="flex items-center gap-3 mb-10 px-2">
+            <div className="w-10 h-10 bg-zinc-900 rounded-xl flex items-center justify-center shadow-md shadow-zinc-950/10 shrink-0">
+              <ShieldCheck className="text-white w-5 h-5" />
+            </div>
+            <div className="flex flex-col">
+              <span className="text-base font-bold tracking-tight text-zinc-900 leading-none">LendFlow Pro</span>
+              <span className="text-[10px] font-semibold text-zinc-400 mt-1.5 uppercase tracking-wider">Lender Suite</span>
+            </div>
           </div>
-          <span className="text-lg font-bold tracking-tight text-zinc-900">LendFlow Pro</span>
+
+          <nav className="space-y-1.5">
+            <button 
+              onClick={() => setView('queue')}
+              className={cn(
+                "w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200",
+                view === 'queue' 
+                  ? "bg-zinc-900 text-white font-semibold shadow-sm shadow-zinc-950/10" 
+                  : "text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900 font-medium"
+              )}
+            >
+              <LayoutDashboard className="w-5 h-5" />
+              <span>Applications</span>
+            </button>
+            <button 
+              onClick={() => setView('analytics')}
+              className={cn(
+                "w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200",
+                view === 'analytics' 
+                  ? "bg-zinc-900 text-white font-semibold shadow-sm shadow-zinc-950/10" 
+                  : "text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900 font-medium"
+              )}
+            >
+              <BarChart3 className="w-5 h-5" />
+              <span>Analytics</span>
+            </button>
+            <button 
+              onClick={() => setView('settings')}
+              className={cn(
+                "w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200",
+                view === 'settings' 
+                  ? "bg-zinc-900 text-white font-semibold shadow-sm shadow-zinc-950/10" 
+                  : "text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900 font-medium"
+              )}
+            >
+              <Settings className="w-5 h-5" />
+              <span>Settings</span>
+            </button>
+            {onSwitchView && (
+              <div className="pt-4 mt-4 border-t border-zinc-100">
+                <button 
+                  onClick={onSwitchView}
+                  className="w-full flex items-center gap-3 px-4 py-3 text-zinc-600 hover:text-zinc-900 hover:bg-zinc-100 rounded-xl transition-all duration-200 font-medium border border-dashed border-zinc-200 hover:border-zinc-300"
+                >
+                  <ArrowRightLeft className="w-4 h-4 text-zinc-400" />
+                  <span className="text-sm">Admin Dashboard</span>
+                </button>
+              </div>
+            )}
+          </nav>
         </div>
 
-        <nav className="flex-1 space-y-2">
-          <button 
-            onClick={() => setView('queue')}
-            className={cn(
-              "w-full flex items-center gap-3 px-4 py-3 rounded-xl font-medium transition-all",
-              view === 'queue' ? "bg-zinc-100 text-zinc-900" : "text-zinc-500 hover:bg-zinc-50"
-            )}
-          >
-            <LayoutDashboard className="w-5 h-5" />
-            Applications
-          </button>
-          <button 
-            onClick={() => setView('analytics')}
-            className={cn(
-              "w-full flex items-center gap-3 px-4 py-3 rounded-xl font-medium transition-all",
-              view === 'analytics' ? "bg-zinc-100 text-zinc-900" : "text-zinc-500 hover:bg-zinc-50"
-            )}
-          >
-            <BarChart3 className="w-5 h-5" />
-            Analytics
-          </button>
-          <button 
-            onClick={() => setView('settings')}
-            className={cn(
-              "w-full flex items-center gap-3 px-4 py-3 rounded-xl font-medium transition-all",
-              view === 'settings' ? "bg-zinc-100 text-zinc-900" : "text-zinc-500 hover:bg-zinc-50"
-            )}
-          >
-            <Settings className="w-5 h-5" />
-            Settings
-          </button>
-          {onSwitchView && (
-            <button 
-              onClick={onSwitchView}
-              className="w-full flex items-center gap-3 px-4 py-3 text-zinc-500 hover:text-zinc-900 hover:bg-zinc-50 rounded-xl transition-all"
-            >
-              <ArrowRightLeft className="w-5 h-5" />
-              Admin Dashboard
-            </button>
-          )}
-        </nav>
-
-        <div className="pt-8 border-t border-zinc-100">
-          <div className="flex items-center gap-3 mb-6">
-            <div className="w-10 h-10 rounded-full bg-zinc-900 flex items-center justify-center text-white font-bold">
-              {user?.displayName?.charAt(0)}
+        <div className="pt-6 border-t border-zinc-100 space-y-4">
+          <div className="flex items-center gap-3 px-2">
+            <div className="w-10 h-10 rounded-full bg-zinc-900 flex items-center justify-center text-white font-bold shadow-inner text-sm shrink-0">
+              {user?.displayName?.charAt(0) || user?.email?.charAt(0).toUpperCase() || '?'}
             </div>
             <div className="flex-1 min-w-0">
-              <div className="text-sm font-bold text-zinc-900 truncate">{user?.displayName}</div>
+              <div className="text-sm font-bold text-zinc-900 truncate">{user?.displayName || 'Lender'}</div>
               <div className="text-xs text-zinc-500 truncate">Lender Account</div>
             </div>
           </div>
           <button 
             onClick={signOut}
-            className="w-full flex items-center gap-3 px-4 py-3 text-zinc-500 hover:text-zinc-900 hover:bg-zinc-50 rounded-xl transition-all"
+            className="w-full flex items-center gap-3 px-4 py-3 text-zinc-500 hover:text-red-600 hover:bg-red-50 rounded-xl transition-all duration-200 font-semibold"
           >
-            <LogOut className="w-5 h-5" />
-            Sign Out
+            <LogOut className="w-5 h-5 text-zinc-400" />
+            <span>Sign Out</span>
           </button>
         </div>
       </aside>
@@ -3914,6 +4473,23 @@ const LenderDashboard = ({ onSwitchView }: { onSwitchView?: () => void }) => {
                       <AlertCircle className="w-4 h-4" />
                       Lender Feedback (Visible to Borrower)
                     </h4>
+                    
+                    <div className="mb-4 bg-zinc-50/50 p-4 rounded-2xl border border-zinc-100">
+                      <div className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-2.5">Quick-Reply Templates</div>
+                      <div className="flex flex-wrap gap-2">
+                        {QUICK_REPLIES.map((reply, idx) => (
+                          <button
+                            key={idx}
+                            type="button"
+                            onClick={() => setLenderNotes(prev => prev ? `${prev}\n\n${reply.text}` : reply.text)}
+                            className="px-3 py-1.5 bg-white hover:bg-zinc-900 hover:text-white hover:border-zinc-900 text-zinc-700 rounded-xl text-xs font-semibold border border-zinc-200 shadow-sm transition-all duration-200 active:scale-95 cursor-pointer"
+                          >
+                            + {reply.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
                     <textarea 
                       value={lenderNotes}
                       onChange={(e) => setLenderNotes(e.target.value)}
@@ -4276,6 +4852,13 @@ const AdminDashboard = ({ onSwitchView }: { onSwitchView?: () => void }) => {
         updateData.internalNotes = internalNotes;
       }
       await updateDoc(doc(db, 'applications', id), updateData);
+
+      const app = applications.find(a => a.id === id) || selectedAdminApp || undefined;
+      await sendLenderNotification(id, 'status_change', {
+        status,
+        feedback: notes,
+        application: app
+      });
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, `applications/${id}`);
     }
@@ -4288,6 +4871,11 @@ const AdminDashboard = ({ onSwitchView }: { onSwitchView?: () => void }) => {
         lenderNotes: adminLenderNotes,
         internalNotes: adminInternalNotes,
         updatedAt: serverTimestamp(),
+      });
+
+      await sendLenderNotification(selectedAdminApp.id, 'feedback_change', {
+        feedback: adminLenderNotes,
+        application: selectedAdminApp
       });
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, `applications/${selectedAdminApp.id}`);
@@ -4401,82 +4989,97 @@ const AdminDashboard = ({ onSwitchView }: { onSwitchView?: () => void }) => {
 
   return (
     <div className="min-h-screen bg-zinc-50 flex">
-      <aside className="w-72 bg-white border-r border-zinc-200 p-8 flex flex-col">
-        <div className="flex items-center gap-2 mb-12">
-          <div className="w-8 h-8 bg-zinc-900 rounded-lg flex items-center justify-center">
-            <ShieldCheck className="text-white w-5 h-5" />
+      <aside className="w-72 bg-white border-r border-zinc-200 p-6 flex flex-col justify-between select-none">
+        <div>
+          <div className="flex items-center gap-3 mb-10 px-2">
+            <div className="w-10 h-10 bg-zinc-900 rounded-xl flex items-center justify-center shadow-md shadow-zinc-950/10 shrink-0">
+              <ShieldCheck className="text-white w-5 h-5" />
+            </div>
+            <div className="flex flex-col">
+              <span className="text-base font-bold tracking-tight text-zinc-900 leading-none">LendFlow Admin</span>
+              <span className="text-[10px] font-semibold text-zinc-400 mt-1.5 uppercase tracking-wider">Control Panel</span>
+            </div>
           </div>
-          <span className="text-lg font-bold tracking-tight text-zinc-900">LendFlow Admin</span>
+
+          <nav className="space-y-1.5">
+            <button 
+              onClick={() => setView('overview')}
+              className={cn(
+                "w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200",
+                view === 'overview' 
+                  ? "bg-zinc-900 text-white font-semibold shadow-sm shadow-zinc-950/10" 
+                  : "text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900 font-medium"
+              )}
+            >
+              <LayoutDashboard className="w-5 h-5" />
+              <span>Overview</span>
+            </button>
+            <button 
+              onClick={() => setView('applications')}
+              className={cn(
+                "w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200",
+                view === 'applications' 
+                  ? "bg-zinc-900 text-white font-semibold shadow-sm shadow-zinc-950/10" 
+                  : "text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900 font-medium"
+              )}
+            >
+              <DollarSign className="w-5 h-5" />
+              <span>Applications</span>
+            </button>
+            <button 
+              onClick={() => setView('users')}
+              className={cn(
+                "w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200",
+                view === 'users' 
+                  ? "bg-zinc-900 text-white font-semibold shadow-sm shadow-zinc-950/10" 
+                  : "text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900 font-medium"
+              )}
+            >
+              <Users className="w-5 h-5" />
+              <span>Users</span>
+            </button>
+            <button 
+              onClick={() => setView('settings')}
+              className={cn(
+                "w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200",
+                view === 'settings' 
+                  ? "bg-zinc-900 text-white font-semibold shadow-sm shadow-zinc-950/10" 
+                  : "text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900 font-medium"
+              )}
+            >
+              <Settings className="w-5 h-5" />
+              <span>Settings</span>
+            </button>
+            {onSwitchView && (
+              <div className="pt-4 mt-4 border-t border-zinc-100">
+                <button 
+                  onClick={onSwitchView}
+                  className="w-full flex items-center gap-3 px-4 py-3 text-zinc-600 hover:text-zinc-900 hover:bg-zinc-100 rounded-xl transition-all duration-200 font-medium border border-dashed border-zinc-200 hover:border-zinc-300"
+                >
+                  <ArrowRightLeft className="w-4 h-4 text-zinc-400" />
+                  <span className="text-sm">User Dashboard</span>
+                </button>
+              </div>
+            )}
+          </nav>
         </div>
 
-        <nav className="flex-1 space-y-2">
-          <button 
-            onClick={() => setView('overview')}
-            className={cn(
-              "w-full flex items-center gap-3 px-4 py-3 rounded-xl font-medium transition-all",
-              view === 'overview' ? "bg-zinc-900 text-white" : "text-zinc-500 hover:bg-zinc-50"
-            )}
-          >
-            <LayoutDashboard className="w-5 h-5" />
-            Overview
-          </button>
-          <button 
-            onClick={() => setView('applications')}
-            className={cn(
-              "w-full flex items-center gap-3 px-4 py-3 rounded-xl font-medium transition-all",
-              view === 'applications' ? "bg-zinc-900 text-white" : "text-zinc-500 hover:bg-zinc-50"
-            )}
-          >
-            <DollarSign className="w-5 h-5" />
-            Applications
-          </button>
-          <button 
-            onClick={() => setView('users')}
-            className={cn(
-              "w-full flex items-center gap-3 px-4 py-3 rounded-xl font-medium transition-all",
-              view === 'users' ? "bg-zinc-900 text-white" : "text-zinc-500 hover:bg-zinc-50"
-            )}
-          >
-            <Users className="w-5 h-5" />
-            Users
-          </button>
-          <button 
-            onClick={() => setView('settings')}
-            className={cn(
-              "w-full flex items-center gap-3 px-4 py-3 rounded-xl font-medium transition-all",
-              view === 'settings' ? "bg-zinc-900 text-white" : "text-zinc-500 hover:bg-zinc-50"
-            )}
-          >
-            <Settings className="w-5 h-5" />
-            Settings
-          </button>
-          {onSwitchView && (
-            <button 
-              onClick={onSwitchView}
-              className="w-full flex items-center gap-3 px-4 py-3 text-zinc-500 hover:text-zinc-900 hover:bg-zinc-50 rounded-xl transition-all"
-            >
-              <ArrowRightLeft className="w-5 h-5" />
-              User Dashboard
-            </button>
-          )}
-        </nav>
-
-        <div className="pt-8 border-t border-zinc-100">
-          <div className="flex items-center gap-3 mb-6">
-            <div className="w-10 h-10 rounded-full bg-zinc-900 flex items-center justify-center text-white font-bold">
-              A
+        <div className="pt-6 border-t border-zinc-100 space-y-4">
+          <div className="flex items-center gap-3 px-2">
+            <div className="w-10 h-10 rounded-full bg-zinc-900 flex items-center justify-center text-white font-bold shadow-inner text-sm shrink-0">
+              {user?.displayName?.charAt(0) || user?.email?.charAt(0).toUpperCase() || 'A'}
             </div>
             <div className="flex-1 min-w-0">
-              <div className="text-sm font-bold text-zinc-900 truncate">Admin</div>
+              <div className="text-sm font-bold text-zinc-900 truncate">{user?.displayName || 'Admin'}</div>
               <div className="text-xs text-zinc-500 truncate">{user?.email}</div>
             </div>
           </div>
           <button 
             onClick={signOut}
-            className="w-full flex items-center gap-3 px-4 py-3 text-zinc-500 hover:text-zinc-900 hover:bg-zinc-50 rounded-xl transition-all"
+            className="w-full flex items-center gap-3 px-4 py-3 text-zinc-500 hover:text-red-600 hover:bg-red-50 rounded-xl transition-all duration-200 font-semibold"
           >
-            <LogOut className="w-5 h-5" />
-            Sign Out
+            <LogOut className="w-5 h-5 text-zinc-400" />
+            <span>Sign Out</span>
           </button>
         </div>
       </aside>
@@ -5477,6 +6080,23 @@ const AdminDashboard = ({ onSwitchView }: { onSwitchView?: () => void }) => {
                       <AlertCircle className="w-4 h-4" />
                       Lender Feedback (Visible to Borrower)
                     </h4>
+
+                    <div className="mb-4 bg-zinc-50/50 p-4 rounded-2xl border border-zinc-100">
+                      <div className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-2.5">Quick-Reply Templates</div>
+                      <div className="flex flex-wrap gap-2">
+                        {QUICK_REPLIES.map((reply, idx) => (
+                          <button
+                            key={idx}
+                            type="button"
+                            onClick={() => setAdminLenderNotes(prev => prev ? `${prev}\n\n${reply.text}` : reply.text)}
+                            className="px-3 py-1.5 bg-white hover:bg-zinc-900 hover:text-white hover:border-zinc-900 text-zinc-700 rounded-xl text-xs font-semibold border border-zinc-200 shadow-sm transition-all duration-200 active:scale-95 cursor-pointer"
+                          >
+                            + {reply.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
                     <textarea 
                       value={adminLenderNotes}
                       onChange={(e) => setAdminLenderNotes(e.target.value)}

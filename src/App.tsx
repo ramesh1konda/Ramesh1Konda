@@ -55,7 +55,8 @@ import {
   X,
   Home,
   Car,
-  ArrowRightLeft
+  ArrowRightLeft,
+  History
 } from 'lucide-react';
 import { format, startOfDay, subDays, isSameDay } from 'date-fns';
 import { clsx, type ClassValue } from 'clsx';
@@ -1275,7 +1276,7 @@ const BorrowerDashboard = ({ onSwitchView }: { onSwitchView?: () => void }) => {
   const { user, profile, signOut } = useAuth();
   const { config } = useBranding();
   const isBroker = profile?.role === UserRole.BROKER;
-  const [view, setView] = useState<'dashboard' | 'settings' | 'branding'>('dashboard');
+  const [view, setView] = useState<'dashboard' | 'settings' | 'branding' | 'history'>('dashboard');
   const [applications, setApplications] = useState<LoanApplication[]>([]);
   const [showForm, setShowForm] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -1971,6 +1972,103 @@ const BorrowerDashboard = ({ onSwitchView }: { onSwitchView?: () => void }) => {
     }
   };
 
+  const LoanHistoryView = () => {
+    const historyApps = applications.filter(app => 
+      app.status === ApplicationStatus.FUNDED || 
+      app.status === ApplicationStatus.COMPLETED ||
+      app.status === ApplicationStatus.APPROVED
+    );
+
+    return (
+      <div className="space-y-8">
+        <header className="mb-8">
+          <h2 className="text-4xl font-bold tracking-tight text-zinc-900 mb-2">Loan History</h2>
+          <p className="text-zinc-500">Track your previously funded, approved, and completed loan applications along with payoff dates.</p>
+        </header>
+
+        {historyApps.length === 0 ? (
+          <div className="bg-white rounded-3xl p-16 border border-dashed border-zinc-200 text-center max-w-3xl">
+            <div className="w-16 h-16 bg-zinc-50 rounded-full flex items-center justify-center mx-auto mb-6">
+              <History className="w-8 h-8 text-zinc-400" />
+            </div>
+            <h3 className="text-xl font-bold text-zinc-900 mb-2">No Loan History Yet</h3>
+            <p className="text-zinc-500 max-w-md mx-auto">
+              Once your applications are approved, funded, or fully paid off, they will appear here in your loan history.
+            </p>
+          </div>
+        ) : (
+          <div className="grid gap-6">
+            {historyApps.map((app) => (
+              <div 
+                key={app.id}
+                onClick={() => setSelectedApp(app)}
+                className="bg-white p-8 rounded-3xl border border-zinc-200 shadow-sm hover:shadow-md transition-all flex flex-col md:flex-row md:items-center justify-between group cursor-pointer gap-6"
+              >
+                <div className="flex items-center gap-6">
+                  <div className={cn(
+                    "w-14 h-14 rounded-2xl flex items-center justify-center shrink-0",
+                    app.status === ApplicationStatus.COMPLETED ? "bg-zinc-100 text-zinc-600" : "bg-emerald-50 text-emerald-600"
+                  )}>
+                    {app.status === ApplicationStatus.COMPLETED ? <CheckCircle2 className="w-7 h-7" /> : <TrendingUp className="w-7 h-7" />}
+                  </div>
+                  <div>
+                    <div className="text-xs font-bold text-zinc-400 uppercase tracking-wider mb-1 flex items-center gap-2">
+                      {getPurposeIcon(app.purpose)}
+                      {app.purpose}
+                    </div>
+                    <div className="text-2xl font-bold text-zinc-900 flex items-baseline gap-2">
+                      <span>${app.amount.toLocaleString()}</span>
+                      <span className="text-xs font-semibold text-zinc-400">({app.loanTerm} months)</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:flex md:items-center gap-6 md:gap-12">
+                  <div>
+                    <div className="text-xs font-bold text-zinc-400 uppercase tracking-wider mb-1">Status</div>
+                    <span className={cn(
+                      "text-xs font-bold px-3 py-1 rounded-full inline-block whitespace-nowrap",
+                      app.status === ApplicationStatus.COMPLETED ? "bg-zinc-100 text-zinc-700" :
+                      app.status === ApplicationStatus.FUNDED ? "bg-emerald-100 text-emerald-700" :
+                      "bg-amber-100 text-amber-700"
+                    )}>
+                      {app.status === ApplicationStatus.APPROVED ? 'Approved (Pending Funding)' : 
+                       app.status === ApplicationStatus.FUNDED ? 'Funded & Active' : 'Completed / Paid Off'}
+                    </span>
+                  </div>
+
+                  <div>
+                    <div className="text-xs font-bold text-zinc-400 uppercase tracking-wider mb-1">Payoff Date</div>
+                    <div className="text-sm font-bold text-zinc-900 whitespace-nowrap">
+                      {app.payoffDate || 'N/A'}
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="text-xs font-bold text-zinc-400 uppercase tracking-wider mb-1">Funded At</div>
+                    <div className="text-sm font-medium text-zinc-500 whitespace-nowrap">
+                      {app.fundedAt?.toDate ? format(app.fundedAt.toDate(), 'dd MMM yyyy') : (app.status === ApplicationStatus.COMPLETED ? 'Paid Off' : 'Pending')}
+                    </div>
+                  </div>
+
+                  <button 
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setSelectedApp(app);
+                    }}
+                    className="col-span-2 sm:col-span-1 px-4 py-2 bg-zinc-100 text-zinc-900 rounded-xl text-sm font-bold hover:bg-zinc-200 transition-all opacity-0 group-hover:opacity-100 whitespace-nowrap self-center"
+                  >
+                    View History & Stats
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   return (
     <div className="min-h-screen bg-zinc-50 flex">
       {/* Sidebar */}
@@ -1998,6 +2096,18 @@ const BorrowerDashboard = ({ onSwitchView }: { onSwitchView?: () => void }) => {
             >
               <LayoutDashboard className="w-5 h-5" />
               <span>Dashboard</span>
+            </button>
+            <button 
+              onClick={() => setView('history')}
+              className={cn(
+                "w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-200",
+                view === 'history' 
+                  ? "bg-zinc-900 text-white font-semibold shadow-sm shadow-zinc-950/10" 
+                  : "text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900 font-medium"
+              )}
+            >
+              <History className="w-5 h-5" />
+              <span>Loan History</span>
             </button>
             {isBroker && (
               <button 
@@ -2065,6 +2175,8 @@ const BorrowerDashboard = ({ onSwitchView }: { onSwitchView?: () => void }) => {
           <SettingsView />
         ) : view === 'branding' ? (
           <BrokerBrandingSettings />
+        ) : view === 'history' ? (
+          <LoanHistoryView />
         ) : (
           <>
             <header className="flex justify-between items-end mb-12">
@@ -3390,32 +3502,49 @@ const BorrowerDashboard = ({ onSwitchView }: { onSwitchView?: () => void }) => {
                     </div>
                   )}
 
+                  {selectedApp.payoffDate && (
+                    <div className="mb-8 p-6 bg-emerald-50 border border-emerald-100 rounded-3xl flex items-center justify-between">
+                      <div>
+                        <div className="text-xs font-bold text-emerald-800 uppercase tracking-widest mb-1">Payoff Schedule</div>
+                        <div className="text-lg font-bold text-emerald-950">
+                          {selectedApp.status === ApplicationStatus.COMPLETED ? 'Fully Paid Off' : 'Active Funded Loan'}
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <div className="text-xs font-bold text-emerald-800 uppercase tracking-widest mb-1">Estimated Payoff Date</div>
+                        <div className="text-base font-bold text-emerald-700">{selectedApp.payoffDate}</div>
+                      </div>
+                    </div>
+                  )}
+
                   <div className="mb-10">
                     <h4 className="text-sm font-bold text-zinc-900 mb-4 flex items-center gap-2">
-                      <Clock className="w-4 h-4" />
-                      Application Progress
-                    </h4>
-                    <div className="space-y-6">
-                      {[
-                        { label: 'Application Submitted', date: selectedApp.createdAt?.toDate ? format(selectedApp.createdAt.toDate(), 'dd MMM yyyy') : '...', completed: true },
-                        { label: 'Under Review', date: selectedApp.status !== ApplicationStatus.PENDING ? 'In Progress' : 'Pending', completed: selectedApp.status !== ApplicationStatus.PENDING },
-                        { label: 'Final Decision', date: (selectedApp.status === ApplicationStatus.APPROVED || selectedApp.status === ApplicationStatus.REJECTED) && selectedApp.updatedAt?.toDate ? format(selectedApp.updatedAt.toDate(), 'dd MMM yyyy') : 'Pending', completed: selectedApp.status === ApplicationStatus.APPROVED || selectedApp.status === ApplicationStatus.REJECTED }
-                      ].map((step, idx) => (
-                        <div key={idx} className="flex items-center gap-4">
-                          <div className={cn(
-                            "w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold",
-                            step.completed ? "bg-zinc-900 text-white" : "bg-zinc-100 text-zinc-400"
-                          )}>
-                            {step.completed ? <CheckCircle2 className="w-4 h-4" /> : idx + 1}
-                          </div>
-                          <div className="flex-1">
-                            <div className="text-sm font-bold text-zinc-900">{step.label}</div>
-                            <div className="text-xs text-zinc-500">{step.date}</div>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
+                       <Clock className="w-4 h-4" />
+                       Application Progress
+                     </h4>
+                     <div className="space-y-6">
+                       {[
+                         { label: 'Application Submitted', date: selectedApp.createdAt?.toDate ? format(selectedApp.createdAt.toDate(), 'dd MMM yyyy') : '...', completed: true },
+                         { label: 'Under Review', date: selectedApp.status !== ApplicationStatus.PENDING ? 'In Progress' : 'Pending', completed: selectedApp.status !== ApplicationStatus.PENDING },
+                         { label: 'Final Decision', date: (selectedApp.status === ApplicationStatus.APPROVED || selectedApp.status === ApplicationStatus.REJECTED || selectedApp.status === ApplicationStatus.FUNDED || selectedApp.status === ApplicationStatus.COMPLETED) && selectedApp.updatedAt?.toDate ? format(selectedApp.updatedAt.toDate(), 'dd MMM yyyy') : 'Pending', completed: selectedApp.status === ApplicationStatus.APPROVED || selectedApp.status === ApplicationStatus.REJECTED || selectedApp.status === ApplicationStatus.FUNDED || selectedApp.status === ApplicationStatus.COMPLETED },
+                         { label: 'Funded', date: selectedApp.fundedAt?.toDate ? format(selectedApp.fundedAt.toDate(), 'dd MMM yyyy') : (selectedApp.status === ApplicationStatus.FUNDED || selectedApp.status === ApplicationStatus.COMPLETED ? 'Active' : 'Pending'), completed: selectedApp.status === ApplicationStatus.FUNDED || selectedApp.status === ApplicationStatus.COMPLETED },
+                         { label: 'Completed / Paid Off', date: selectedApp.completedAt?.toDate ? format(selectedApp.completedAt.toDate(), 'dd MMM yyyy') : (selectedApp.status === ApplicationStatus.COMPLETED ? 'Paid' : 'Pending'), completed: selectedApp.status === ApplicationStatus.COMPLETED }
+                       ].map((step, idx) => (
+                         <div key={idx} className="flex items-center gap-4">
+                           <div className={cn(
+                             "w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold",
+                             step.completed ? "bg-zinc-900 text-white" : "bg-zinc-100 text-zinc-400"
+                           )}>
+                             {step.completed ? <CheckCircle2 className="w-4 h-4" /> : idx + 1}
+                           </div>
+                           <div className="flex-1">
+                             <div className="text-sm font-bold text-zinc-900">{step.label}</div>
+                             <div className="text-xs text-zinc-500">{step.date}</div>
+                           </div>
+                         </div>
+                       ))}
+                     </div>
+                   </div>
 
                   {selectedApp.lenderNotes && (
                     <div className="mb-10">
@@ -3647,6 +3776,7 @@ const LenderDashboard = ({ onSwitchView }: { onSwitchView?: () => void }) => {
   const [proposedTerm, setProposedTerm] = useState('');
   const [proposedNotes, setProposedNotes] = useState('');
   const [showProposeForm, setShowProposeForm] = useState(false);
+  const [payoffDateInput, setPayoffDateInput] = useState('');
 
   useEffect(() => {
     if (selectedApp) {
@@ -3657,6 +3787,7 @@ const LenderDashboard = ({ onSwitchView }: { onSwitchView?: () => void }) => {
       setProposedNotes('');
       setShowProposeForm(false);
       setActiveApplicantIndex(0);
+      setPayoffDateInput(selectedApp.payoffDate || '');
     }
   }, [selectedApp]);
 
@@ -3675,20 +3806,21 @@ const LenderDashboard = ({ onSwitchView }: { onSwitchView?: () => void }) => {
     return () => unsubscribe();
   }, []);
 
-  const handleStatusUpdate = async (id: string, status: ApplicationStatus) => {
+  const handleStatusUpdate = async (id: string, status: ApplicationStatus, extraFields: Record<string, any> = {}) => {
     try {
       await updateDoc(doc(db, 'applications', id), {
         status,
         lenderNotes,
         internalNotes,
         updatedAt: serverTimestamp(),
+        ...extraFields,
       });
 
       if (selectedApp) {
         await sendLenderNotification(id, 'status_change', {
           status,
           feedback: lenderNotes,
-          application: selectedApp
+          application: { ...selectedApp, ...extraFields }
         });
       }
 
@@ -4568,28 +4700,89 @@ const LenderDashboard = ({ onSwitchView }: { onSwitchView?: () => void }) => {
                     )}
                   </div>
 
-                  <div className="flex gap-4">
-                    <button 
-                      onClick={() => handleStatusUpdate(selectedApp.id, ApplicationStatus.REJECTED)}
-                      className="flex-1 py-4 bg-red-50 text-red-600 rounded-2xl font-bold hover:bg-red-100 transition-all flex items-center justify-center gap-2"
-                    >
-                      <XCircle className="w-5 h-5" />
-                      Reject
-                    </button>
-                    <button 
-                      onClick={() => handleStatusUpdate(selectedApp.id, ApplicationStatus.REVIEWING)}
-                      className="flex-1 py-4 bg-zinc-100 text-zinc-900 rounded-2xl font-bold hover:bg-zinc-200 transition-all"
-                    >
-                      Mark Reviewing
-                    </button>
-                    <button 
-                      onClick={() => handleStatusUpdate(selectedApp.id, ApplicationStatus.APPROVED)}
-                      className="flex-1 py-4 bg-emerald-600 text-white rounded-2xl font-bold hover:bg-emerald-700 transition-all flex items-center justify-center gap-2"
-                    >
-                      <CheckCircle2 className="w-5 h-5" />
-                      Approve
-                    </button>
-                  </div>
+                  {selectedApp.status === ApplicationStatus.APPROVED && (
+                    <div className="space-y-4 bg-emerald-50/50 p-6 rounded-3xl border border-emerald-100 mb-4">
+                      <div className="flex items-center gap-2 text-emerald-800 font-bold text-sm">
+                        <TrendingUp className="w-5 h-5" />
+                        <span>Fund & Schedule Payoff</span>
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-[10px] font-bold text-emerald-800 uppercase tracking-widest ml-1">Payoff Date</label>
+                        <input 
+                          type="date"
+                          value={payoffDateInput}
+                          onChange={(e) => setPayoffDateInput(e.target.value)}
+                          className="w-full px-6 py-4 bg-white border border-emerald-200 rounded-2xl focus:outline-none focus:ring-2 focus:ring-emerald-900 transition-all text-sm font-bold"
+                        />
+                      </div>
+                      <button 
+                        onClick={() => {
+                          if (!payoffDateInput) {
+                            alert('Please select a payoff date.');
+                            return;
+                          }
+                          handleStatusUpdate(selectedApp.id, ApplicationStatus.FUNDED, { 
+                            payoffDate: payoffDateInput, 
+                            fundedAt: serverTimestamp() 
+                          });
+                        }}
+                        className="w-full py-4 bg-emerald-600 text-white rounded-2xl font-bold hover:bg-emerald-700 transition-all flex items-center justify-center gap-2"
+                      >
+                        <CheckCircle2 className="w-5 h-5" />
+                        Fund Loan
+                      </button>
+                    </div>
+                  )}
+
+                  {selectedApp.status === ApplicationStatus.FUNDED && (
+                    <div className="space-y-4 bg-zinc-50 p-6 rounded-3xl border border-zinc-200 mb-4">
+                      <div className="flex items-center gap-2 text-zinc-800 font-bold text-sm">
+                        <CheckCircle2 className="w-5 h-5" />
+                        <span>Mark Loan as Completed</span>
+                      </div>
+                      <p className="text-xs text-zinc-500">
+                        Mark this loan as successfully completed/paid off once the borrower has cleared all outstanding balances.
+                      </p>
+                      <button 
+                        onClick={() => {
+                          handleStatusUpdate(selectedApp.id, ApplicationStatus.COMPLETED, { 
+                            completedAt: serverTimestamp() 
+                          });
+                        }}
+                        className="w-full py-4 bg-zinc-900 text-white rounded-2xl font-bold hover:bg-zinc-800 transition-all flex items-center justify-center gap-2"
+                      >
+                        <CheckCircle2 className="w-5 h-5" />
+                        Mark Completed / Paid Off
+                      </button>
+                    </div>
+                  )}
+
+                  {(selectedApp.status === ApplicationStatus.PENDING || 
+                    selectedApp.status === ApplicationStatus.REVIEWING || 
+                    selectedApp.status === ApplicationStatus.PROPOSED) && (
+                    <div className="flex gap-4">
+                      <button 
+                        onClick={() => handleStatusUpdate(selectedApp.id, ApplicationStatus.REJECTED)}
+                        className="flex-1 py-4 bg-red-50 text-red-600 rounded-2xl font-bold hover:bg-red-100 transition-all flex items-center justify-center gap-2"
+                      >
+                        <XCircle className="w-5 h-5" />
+                        Reject
+                      </button>
+                      <button 
+                        onClick={() => handleStatusUpdate(selectedApp.id, ApplicationStatus.REVIEWING)}
+                        className="flex-1 py-4 bg-zinc-100 text-zinc-900 rounded-2xl font-bold hover:bg-zinc-200 transition-all"
+                      >
+                        Mark Reviewing
+                      </button>
+                      <button 
+                        onClick={() => handleStatusUpdate(selectedApp.id, ApplicationStatus.APPROVED)}
+                        className="flex-1 py-4 bg-emerald-600 text-white rounded-2xl font-bold hover:bg-emerald-700 transition-all flex items-center justify-center gap-2"
+                      >
+                        <CheckCircle2 className="w-5 h-5" />
+                        Approve
+                      </button>
+                    </div>
+                  )}
                 </div>
               </motion.div>
             </div>
@@ -4639,6 +4832,7 @@ const AdminDashboard = ({ onSwitchView }: { onSwitchView?: () => void }) => {
   };
   const [adminLenderNotes, setAdminLenderNotes] = useState('');
   const [adminInternalNotes, setAdminInternalNotes] = useState('');
+  const [adminPayoffDateInput, setAdminPayoffDateInput] = useState('');
 
   useEffect(() => {
     const ensureAdminProfile = async () => {
@@ -4673,6 +4867,7 @@ const AdminDashboard = ({ onSwitchView }: { onSwitchView?: () => void }) => {
       setAdminLenderNotes(selectedAdminApp.lenderNotes || '');
       setAdminInternalNotes(selectedAdminApp.internalNotes || '');
       setActiveAdminApplicantIndex(0);
+      setAdminPayoffDateInput(selectedAdminApp.payoffDate || '');
     }
   }, [selectedAdminApp]);
   
@@ -4839,11 +5034,12 @@ const AdminDashboard = ({ onSwitchView }: { onSwitchView?: () => void }) => {
     }
   };
 
-  const handleUpdateApplicationStatus = async (id: string, status: ApplicationStatus, notes?: string, internalNotes?: string) => {
+  const handleUpdateApplicationStatus = async (id: string, status: ApplicationStatus, notes?: string, internalNotes?: string, extraFields: Record<string, any> = {}) => {
     try {
       const updateData: any = {
         status,
         updatedAt: serverTimestamp(),
+        ...extraFields,
       };
       if (notes !== undefined) {
         updateData.lenderNotes = notes;
@@ -4857,7 +5053,7 @@ const AdminDashboard = ({ onSwitchView }: { onSwitchView?: () => void }) => {
       await sendLenderNotification(id, 'status_change', {
         status,
         feedback: notes,
-        application: app
+        application: app ? { ...app, ...extraFields } : undefined
       });
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, `applications/${id}`);
@@ -6113,26 +6309,89 @@ const AdminDashboard = ({ onSwitchView }: { onSwitchView?: () => void }) => {
                     </div>
                   </div>
 
-                  <div className="flex gap-4">
-                    <button 
-                      onClick={() => {
-                        handleUpdateApplicationStatus(selectedAdminApp.id, ApplicationStatus.REJECTED, adminLenderNotes, adminInternalNotes);
-                        setSelectedAdminApp(null);
-                      }}
-                      className="flex-1 py-4 bg-red-50 text-red-600 rounded-2xl font-bold hover:bg-red-100 transition-all"
-                    >
-                      Reject
-                    </button>
-                    <button 
-                      onClick={() => {
-                        handleUpdateApplicationStatus(selectedAdminApp.id, ApplicationStatus.APPROVED, adminLenderNotes, adminInternalNotes);
-                        setSelectedAdminApp(null);
-                      }}
-                      className="flex-1 py-4 bg-emerald-600 text-white rounded-2xl font-bold hover:bg-emerald-700 transition-all"
-                    >
-                      Approve
-                    </button>
-                  </div>
+                  {selectedAdminApp.status === ApplicationStatus.APPROVED && (
+                    <div className="space-y-4 bg-emerald-50/50 p-6 rounded-3xl border border-emerald-100 mb-4">
+                      <div className="flex items-center gap-2 text-emerald-800 font-bold text-sm">
+                        <TrendingUp className="w-5 h-5" />
+                        <span>Fund & Schedule Payoff (Admin)</span>
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-[10px] font-bold text-emerald-800 uppercase tracking-widest ml-1">Payoff Date</label>
+                        <input 
+                          type="date"
+                          value={adminPayoffDateInput}
+                          onChange={(e) => setAdminPayoffDateInput(e.target.value)}
+                          className="w-full px-6 py-4 bg-white border border-emerald-200 rounded-2xl focus:outline-none focus:ring-2 focus:ring-emerald-900 transition-all text-sm font-bold"
+                        />
+                      </div>
+                      <button 
+                        onClick={() => {
+                          if (!adminPayoffDateInput) {
+                            alert('Please select a payoff date.');
+                            return;
+                          }
+                          handleUpdateApplicationStatus(selectedAdminApp.id, ApplicationStatus.FUNDED, adminLenderNotes, adminInternalNotes, { 
+                            payoffDate: adminPayoffDateInput, 
+                            fundedAt: serverTimestamp() 
+                          });
+                          setSelectedAdminApp(null);
+                        }}
+                        className="w-full py-4 bg-emerald-600 text-white rounded-2xl font-bold hover:bg-emerald-700 transition-all flex items-center justify-center gap-2"
+                      >
+                        <CheckCircle2 className="w-5 h-5" />
+                        Fund Loan
+                      </button>
+                    </div>
+                  )}
+
+                  {selectedAdminApp.status === ApplicationStatus.FUNDED && (
+                    <div className="space-y-4 bg-zinc-50 p-6 rounded-3xl border border-zinc-200 mb-4">
+                      <div className="flex items-center gap-2 text-zinc-800 font-bold text-sm">
+                        <CheckCircle2 className="w-5 h-5" />
+                        <span>Mark Loan as Completed (Admin)</span>
+                      </div>
+                      <p className="text-xs text-zinc-500">
+                        Mark this loan as successfully completed/paid off once the borrower has cleared all outstanding balances.
+                      </p>
+                      <button 
+                        onClick={() => {
+                          handleUpdateApplicationStatus(selectedAdminApp.id, ApplicationStatus.COMPLETED, adminLenderNotes, adminInternalNotes, { 
+                            completedAt: serverTimestamp() 
+                          });
+                          setSelectedAdminApp(null);
+                        }}
+                        className="w-full py-4 bg-zinc-900 text-white rounded-2xl font-bold hover:bg-zinc-800 transition-all flex items-center justify-center gap-2"
+                      >
+                        <CheckCircle2 className="w-5 h-5" />
+                        Mark Completed / Paid Off
+                      </button>
+                    </div>
+                  )}
+
+                  {(selectedAdminApp.status === ApplicationStatus.PENDING || 
+                    selectedAdminApp.status === ApplicationStatus.REVIEWING || 
+                    selectedAdminApp.status === ApplicationStatus.PROPOSED) && (
+                    <div className="flex gap-4">
+                      <button 
+                        onClick={() => {
+                          handleUpdateApplicationStatus(selectedAdminApp.id, ApplicationStatus.REJECTED, adminLenderNotes, adminInternalNotes);
+                          setSelectedAdminApp(null);
+                        }}
+                        className="flex-1 py-4 bg-red-50 text-red-600 rounded-2xl font-bold hover:bg-red-100 transition-all"
+                      >
+                        Reject
+                      </button>
+                      <button 
+                        onClick={() => {
+                          handleUpdateApplicationStatus(selectedAdminApp.id, ApplicationStatus.APPROVED, adminLenderNotes, adminInternalNotes);
+                          setSelectedAdminApp(null);
+                        }}
+                        className="flex-1 py-4 bg-emerald-600 text-white rounded-2xl font-bold hover:bg-emerald-700 transition-all"
+                      >
+                        Approve
+                      </button>
+                    </div>
+                  )}
                 </div>
               </motion.div>
             </div>

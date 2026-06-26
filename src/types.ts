@@ -38,6 +38,8 @@ export enum ApplicationStatus {
   PROPOSED = 'proposed',
   APPROVED = 'approved',
   REJECTED = 'rejected',
+  FUNDED = 'funded',
+  COMPLETED = 'completed',
 }
 
 export interface ProposedModifications {
@@ -140,6 +142,9 @@ export interface LoanApplication {
   dependents?: number;
   monthlyExpenses?: number;
   otherMonthlyDebts?: number;
+  payoffDate?: string;
+  fundedAt?: any;
+  completedAt?: any;
 }
 
 export interface WhiteLabelConfig {
